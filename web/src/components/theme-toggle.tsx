@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
-const STORAGE_KEY = "chatgpt2api-theme";
+const STORAGE_KEY = "miaowazzImage-theme";
 
 function resolveInitialTheme(): Theme {
   if (typeof window === "undefined") {

@@ -1,6 +1,6 @@
 "use client";
 
-import { login } from "@/lib/api";
+import { fetchMe } from "@/lib/api";
 import { clearStoredAuthSession, getStoredAuthSession, setStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
 export async function getValidatedAuthSession(): Promise<StoredAuthSession | null> {
@@ -10,12 +10,12 @@ export async function getValidatedAuthSession(): Promise<StoredAuthSession | nul
   }
 
   try {
-    const data = await login(storedSession.key);
+    const data = await fetchMe();
     const nextSession: StoredAuthSession = {
       key: storedSession.key,
-      role: data.role,
-      subjectId: data.subject_id,
-      name: data.name,
+      role: data.user.role,
+      subjectId: data.user.id,
+      name: data.user.username,
     };
     await setStoredAuthSession(nextSession);
     return nextSession;

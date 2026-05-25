@@ -229,10 +229,34 @@ export type LoginResponse = {
   name: string;
 };
 
+export type OperationUser = {
+  id: string;
+  username: string;
+  role: AuthRole;
+  status: "active" | "disabled";
+  image_quota: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type PasswordAuthResponse = {
+  ok: boolean;
+  token: string;
+  user: OperationUser;
+};
+
 export type UserKey = {
   id: string;
   name: string;
   role: "user";
+  enabled: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+};
+
+export type PersonalApiKey = {
+  id: string;
+  name: string;
   enabled: boolean;
   created_at: string | null;
   last_used_at: string | null;
@@ -285,6 +309,68 @@ export async function login(authKey: string) {
       Authorization: `Bearer ${normalizedAuthKey}`,
     },
     redirectOnUnauthorized: false,
+  });
+}
+
+export async function passwordLogin(username: string, password: string) {
+  return httpRequest<PasswordAuthResponse>("/auth/password-login", {
+    method: "POST",
+    body: { username, password },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function registerUser(username: string, password: string) {
+  return httpRequest<PasswordAuthResponse>("/auth/register", {
+    method: "POST",
+    body: { username, password },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function fetchMe() {
+  return httpRequest<{ user: OperationUser }>("/api/me");
+}
+
+export async function fetchMyApiKeys() {
+  return httpRequest<{ items: PersonalApiKey[] }>("/api/me/api-keys");
+}
+
+export async function createMyApiKey(name: string) {
+  return httpRequest<{ item: PersonalApiKey; key: string; items: PersonalApiKey[] }>("/api/me/api-keys", {
+    method: "POST",
+    body: { name },
+  });
+}
+
+export async function updateMyApiKey(keyId: string, updates: { name?: string; enabled?: boolean }) {
+  return httpRequest<{ item: PersonalApiKey; items: PersonalApiKey[] }>(`/api/me/api-keys/${keyId}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteMyApiKey(keyId: string) {
+  return httpRequest<{ items: PersonalApiKey[] }>(`/api/me/api-keys/${keyId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchOperationUsers() {
+  return httpRequest<{ items: OperationUser[] }>("/api/admin/users");
+}
+
+export async function setOperationUserStatus(userId: string, status: "active" | "disabled") {
+  return httpRequest<{ item: OperationUser }>(`/api/admin/users/${userId}/status`, {
+    method: "POST",
+    body: { status },
+  });
+}
+
+export async function grantOperationUserQuota(userId: string, amount: number, note = "") {
+  return httpRequest<{ user: OperationUser; record: Record<string, unknown> }>(`/api/admin/users/${userId}/quota`, {
+    method: "POST",
+    body: { amount, note },
   });
 }
 

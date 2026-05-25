@@ -21,6 +21,7 @@ import {
   createImageEditTask,
   createImageGenerationTask,
   fetchAccounts,
+  fetchMe,
   fetchImageTasks,
   type Account,
   type ImageTask,
@@ -34,6 +35,7 @@ import {
   renameImageConversation,
   saveImageConversation,
   saveImageConversations,
+  setImageConversationOwner,
   type ImageConversation,
   type ImageConversationMode,
   type ImageTurn,
@@ -42,9 +44,9 @@ import {
   type StoredReferenceImage,
 } from "@/store/image-conversations";
 
-const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
-const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
-const IMAGE_COUNT_STORAGE_KEY = "chatgpt2api:image_last_count";
+const ACTIVE_CONVERSATION_STORAGE_KEY = "miaowazzImage:image_active_conversation_id";
+const IMAGE_SIZE_STORAGE_KEY = "miaowazzImage:image_last_size";
+const IMAGE_COUNT_STORAGE_KEY = "miaowazzImage:image_last_count";
 const SCROLL_TO_LATEST_THRESHOLD = 160;
 
 function clampImageCount(value: string) {
@@ -223,6 +225,13 @@ function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> 
   return { status: "queued", error: undefined };
 }
 
+function needsImageTaskRefresh(image: StoredImage) {
+  return (
+    image.status === "loading" ||
+    (image.status === "success" && typeof image.url === "string" && image.url.includes("/images/") && !image.url.includes("token="))
+  );
+}
+
 async function syncConversationImageTasks(items: ImageConversation[]) {
   const taskIds = Array.from(
     new Set(
@@ -230,7 +239,7 @@ async function syncConversationImageTasks(items: ImageConversation[]) {
         conversation.turns.flatMap((turn) =>
           turn.resultsDeleted
             ? []
-            : turn.images.flatMap((image) => (image.status === "loading" && image.taskId ? [image.taskId] : [])),
+            : turn.images.flatMap((image) => (needsImageTaskRefresh(image) && image.taskId ? [image.taskId] : [])),
         ),
       ),
     ),
@@ -251,7 +260,7 @@ async function syncConversationImageTasks(items: ImageConversation[]) {
     const turns = conversation.turns.map((turn) => {
       let turnChanged = false;
       const images = turn.images.map((image) => {
-        if (image.status !== "loading" || !image.taskId) {
+        if (!needsImageTaskRefresh(image) || !image.taskId) {
           return image;
         }
         const task = taskMap.get(image.taskId);
@@ -342,7 +351,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 }
 
 
-function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
+function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKey: string }) {
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -373,6 +382,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     | { type: "all" }
     | null
   >(null);
+  const activeConversationStorageKey = `${ACTIVE_CONVERSATION_STORAGE_KEY}:${sessionKey || "anonymous"}`;
+
+  useEffect(() => {
+    setImageConversationOwner(sessionKey);
+  }, [sessionKey]);
 
   const parsedCount = useMemo(() => Number(clampImageCount(imageCount)), [imageCount]);
   const selectedConversation = useMemo(
@@ -471,7 +485,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         conversationsRef.current = normalizedItems;
         setConversations(normalizedItems);
         const storedConversationId =
-          typeof window !== "undefined" ? window.localStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY) : null;
+          typeof window !== "undefined" ? window.localStorage.getItem(activeConversationStorageKey) : null;
         const nextSelectedConversationId =
           (storedConversationId && normalizedItems.some((conversation) => conversation.id === storedConversationId)
             ? storedConversationId
@@ -491,11 +505,16 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeConversationStorageKey]);
 
   const loadQuota = useCallback(async () => {
     if (!isAdmin) {
-      setAvailableQuota("--");
+      try {
+        const data = await fetchMe();
+        setAvailableQuota(String(data.user.image_quota ?? 0));
+      } catch {
+        setAvailableQuota((prev) => (prev === "加载中..." ? "--" : prev));
+      }
       return;
     }
     try {
@@ -562,11 +581,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
 
     if (selectedConversationId) {
-      window.localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, selectedConversationId);
+      window.localStorage.setItem(activeConversationStorageKey, selectedConversationId);
     } else {
-      window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      window.localStorage.removeItem(activeConversationStorageKey);
     }
-  }, [selectedConversationId]);
+  }, [activeConversationStorageKey, selectedConversationId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1373,5 +1392,5 @@ export default function ImagePage() {
     );
   }
 
-  return <ImagePageContent isAdmin={session.role === "admin"} />;
+  return <ImagePageContent isAdmin={session.role === "admin"} sessionKey={session.subjectId || session.name || session.role} />;
 }

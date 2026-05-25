@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from api.support import require_admin, require_identity, resolve_image_base_url
+from api.support import extract_bearer_token, require_admin, require_identity, resolve_image_base_url
 from services.backup_service import BackupError, backup_service
 from services.config import config
 from services.image_service import (
@@ -25,6 +25,7 @@ from services.image_storage_service import ImageStorageError, image_storage_serv
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import test_proxy
+from services.redis_service import redis_client
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -90,13 +91,22 @@ def create_router(app_version: str) -> APIRouter:
         require_admin(authorization)
         return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip())
 
+    def optional_identity(authorization: str | None) -> dict[str, object] | None:
+        token = extract_bearer_token(authorization)
+        if not token:
+            return None
+        try:
+            return require_identity(authorization)
+        except HTTPException:
+            return None
+
     @router.get("/images/{image_path:path}", include_in_schema=False)
-    async def get_image(image_path: str):
-        return get_image_response(image_path)
+    async def get_image(image_path: str, token: str = "", authorization: str | None = Header(default=None)):
+        return get_image_response(image_path, optional_identity(authorization), token)
 
     @router.get("/image-thumbnails/{image_path:path}", include_in_schema=False)
-    async def get_image_thumbnail(image_path: str):
-        return get_thumbnail_response(image_path)
+    async def get_image_thumbnail(image_path: str, token: str = "", authorization: str | None = Header(default=None)):
+        return get_thumbnail_response(image_path, optional_identity(authorization), token)
 
     @router.post("/api/images/delete")
     async def delete_images_endpoint(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
@@ -114,9 +124,9 @@ def create_router(app_version: str) -> APIRouter:
         )
 
     @router.get("/api/images/download/{image_path:path}")
-    async def download_single_image_endpoint(image_path: str, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return get_image_download_response(image_path)
+    async def download_single_image_endpoint(image_path: str, token: str = "", authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        return get_image_download_response(image_path, identity, token)
 
     @router.get("/api/logs")
     async def get_logs(type: str = "", start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
@@ -143,6 +153,10 @@ def create_router(app_version: str) -> APIRouter:
         return {
             "backend": storage.get_backend_info(),
             "health": storage.health_check(),
+            "redis": {
+                "enabled": redis_client.enabled,
+                "healthy": await run_in_threadpool(redis_client.ping) if redis_client.enabled else False,
+            },
         }
 
     @router.post("/api/backup/test")
@@ -282,7 +296,7 @@ def create_router(app_version: str) -> APIRouter:
         return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="zh">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>号池健康监控 - chatgpt2api</title>
+<title>号池健康监控 - miaowazzImage</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}}

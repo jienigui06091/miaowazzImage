@@ -54,12 +54,21 @@ export type ImageConversationStats = {
 };
 
 const imageConversationStorage = localforage.createInstance({
-  name: "chatgpt2api",
+  name: "miaowazzImage",
   storeName: "image_conversations",
 });
 
 const IMAGE_CONVERSATIONS_KEY = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
+let imageConversationOwnerKey = "anonymous";
+
+function currentStorageKey() {
+  return `${IMAGE_CONVERSATIONS_KEY}:${imageConversationOwnerKey || "anonymous"}`;
+}
+
+export function setImageConversationOwner(ownerKey: string) {
+  imageConversationOwnerKey = String(ownerKey || "anonymous").trim() || "anonymous";
+}
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalized = {
@@ -208,7 +217,7 @@ function queueImageConversationWrite<T>(operation: () => Promise<T>): Promise<T>
 async function readStoredImageConversations(): Promise<ImageConversation[]> {
   const items =
     (await imageConversationStorage.getItem<Array<ImageConversation & Record<string, unknown>>>(
-      IMAGE_CONVERSATIONS_KEY,
+      currentStorageKey(),
     )) || [];
   return items.map(normalizeConversation);
 }
@@ -226,7 +235,7 @@ export async function saveImageConversations(conversations: ImageConversation[])
       conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
     }
     await imageConversationStorage.setItem(
-      IMAGE_CONVERSATIONS_KEY,
+      currentStorageKey(),
       sortImageConversations([...conversationMap.values()]),
     );
   });
@@ -242,7 +251,7 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
       persistedConversation,
       ...items.filter((item) => item.id !== persistedConversation.id),
     ]);
-    await imageConversationStorage.setItem(IMAGE_CONVERSATIONS_KEY, nextItems);
+    await imageConversationStorage.setItem(currentStorageKey(), nextItems);
   });
 }
 
@@ -256,7 +265,7 @@ export async function renameImageConversation(id: string, title: string): Promis
       updated,
       ...items.filter((item) => item.id !== id),
     ]);
-    await imageConversationStorage.setItem(IMAGE_CONVERSATIONS_KEY, nextItems);
+    await imageConversationStorage.setItem(currentStorageKey(), nextItems);
   });
 }
 
@@ -264,7 +273,7 @@ export async function deleteImageConversation(id: string): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
     await imageConversationStorage.setItem(
-      IMAGE_CONVERSATIONS_KEY,
+      currentStorageKey(),
       items.filter((item) => item.id !== id),
     );
   });
@@ -272,7 +281,7 @@ export async function deleteImageConversation(id: string): Promise<void> {
 
 export async function clearImageConversations(): Promise<void> {
   await queueImageConversationWrite(async () => {
-    await imageConversationStorage.removeItem(IMAGE_CONVERSATIONS_KEY);
+    await imageConversationStorage.removeItem(currentStorageKey());
   });
 }
 

@@ -18,7 +18,7 @@ def list_models() -> dict[str, Any]:
                 "id": model,
                 "object": "model",
                 "created": 0,
-                "owned_by": "chatgpt2api",
+                "owned_by": "miaowazzImage",
                 "permission": [],
                 "root": model,
                 "parent": None,

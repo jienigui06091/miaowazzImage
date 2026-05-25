@@ -1,346 +1,60 @@
-<h1 align="center">ChatGPT2API</h1>
+# miaowazzImage
 
-
-<p align="center">ChatGPT2API 主要是对 ChatGPT 官网相关能力进行逆向整理与封装，提供面向 ChatGPT 图片生成、图片编辑、多图组图编辑场景的 OpenAI 兼容图片 API / 代理，并集成在线画图、号池管理、多种账号导入方式与 Docker 自托管部署能力。</p>
-
-> [!WARNING]
-> 免责声明：
->
-> 本项目涉及对 ChatGPT 官网文本生成、图片生成与图片编辑等相关接口的逆向研究，仅供个人学习、技术研究与非商业性技术交流使用。
->
-> - 严禁将本项目用于任何商业用途、盈利性使用、批量操作、自动化滥用或规模化调用。
-> - 严禁将本项目用于破坏市场秩序、恶意竞争、套利倒卖、二次售卖相关服务，以及任何违反 OpenAI 服务条款或当地法律法规的行为。
-> - 严禁将本项目用于生成、传播或协助生成违法、暴力、色情、未成年人相关内容，或用于诈骗、欺诈、骚扰等非法或不当用途。
-> - 使用者应自行承担全部风险，包括但不限于账号被限制、临时封禁或永久封禁以及因违规使用等所导致的法律责任。
-> - 使用本项目即视为你已充分理解并同意本免责声明全部内容；如因滥用、违规或违法使用造成任何后果，均由使用者自行承担。
-
-> [!IMPORTANT]
-> 本项目基于对 ChatGPT 官网相关能力的逆向研究实现，存在账号受限、临时封禁或永久封禁的风险。请勿使用你自己的重要账号、常用账号或高价值账号进行测试。
-
-> [!CAUTION]
-> 旧版本存在已知漏洞，请尽快升级到最新版本。公网部署时请尽量不要放置敏感信息，并自行做好访问控制与隔离。
-
-## 快速开始
-
-已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
-
-### Docker 运行
-
-```bash
-git clone git@github.com:basketikun/chatgpt2api.git
-cd chatgpt2api
-docker compose up -d
-```
-
-启动前请先在 `config.json` 中设置 `auth-key`，也可以在 `docker-compose.yml` 中通过 `CHATGPT2API_AUTH_KEY` 覆盖。
-
-- Web 面板：`http://localhost:3000`
-- API 地址：`http://localhost:3000/v1`
-- 数据目录：`./data`
-
-### 本地开发
-
-启动后端：
-
-```bash
-git clone git@github.com:basketikun/chatgpt2api.git
-cd chatgpt2api
-uv sync
-uv run main.py
-```
-
-启动前端：
-
-```bash
-cd chatgpt2api/web
-bun install
-bun run dev
-```
-
-后续更新新版本：
-
-```bash
-docker pull ghcr.io/basketikun/chatgpt2api:latest
-docker-compose down
-docker-compose up -d
-
-```
-
-### 存储后端配置
-
-支持通过环境变量 `STORAGE_BACKEND` 切换存储方式：
-
-- `json` - 本地 JSON 文件（默认）
-- `sqlite` - 本地 SQLite 数据库
-- `postgres` - 外部 PostgreSQL（需配置 `DATABASE_URL`）
-- `git` - Git 私有仓库（需配置 `GIT_REPO_URL` 和 `GIT_TOKEN`）
-
-示例：使用 PostgreSQL
-
-```yaml
-environment:
-  - STORAGE_BACKEND=postgres
-  - DATABASE_URL=postgresql://user:password@host:5432/dbname
-```
+`miaowazzImage` 是一个面向内部运营的多用户图片生成系统，基于原 ChatGPT 图片代理能力二次开发。系统提供统一登录、用户额度、API Key、号池管理、操作日志、图片管理、PostgreSQL 数据存储、Redis 支持以及 Cloudflare R2 图片存储。
 
 ## 功能
 
-### API 兼容能力
+- 用户名密码登录，按角色区分管理员和普通用户。
+- 普通用户可注册，默认启用，初始图片生成额度为 0。
+- 管理员可管理用户、分配生成额度、维护号池。
+- 用户每生成一张图片扣减 1 次额度，失败时自动返还。
+- 用户可在后台生成自己的 API Key。
+- 图片存储支持 Cloudflare R2，访问通过后端签名代理控制权限。
+- 管理员可查看全部图片和日志，普通用户只能访问自己的图片。
+- 日志、图片索引、图片标签等运营数据入库，删除采用软删除。
 
-- 兼容 `POST /v1/images/generations` 图片生成接口
-- 兼容 `POST /v1/images/edits` 图片编辑接口
-- 兼容面向图片场景的 `POST /v1/chat/completions`
-- 兼容面向图片场景的 `POST /v1/responses`
-- `GET /v1/models` 返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、
-  `gpt-5-mini`
-- 支持通过 `n` 返回多张生成结果
-- 支持 Codex 中的画图接口逆向，仅 `Plus` / `Team` / `Pro` 订阅可用，模型别名为 `codex-gpt-image-2`，如有需要可自行在其他场景映射回
-  `gpt-image-2`，用于和官网画图区分；也就意味着同一账号会同时有官网和 Codex 两份生图额度
+## 本地运行
 
-### 在线画图功能
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
 
-- 内置在线画图工作台，支持生成、图片编辑与多图组图编辑
-- 支持 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` 模型选择
-- 编辑模式支持参考图上传
-- 前端支持多图生成交互
-- 本地保存图片会话历史，支持回看、删除和清空
-- 支持服务端缓存图片URL
+默认访问地址：
 
-### 号池管理功能
+```text
+http://127.0.0.1:8000
+```
 
-- 自动刷新账号邮箱、类型、额度和恢复时间
-- 轮询可用账号执行图片生成与图片编辑
-- 遇到 Token 失效类错误时自动剔除无效 Token
-- 定时检查限流账号并自动刷新
-- 支持网页端配置全局 HTTP / HTTPS / SOCKS5 / SOCKS5H 代理
-- 支持搜索、筛选、批量刷新、导出、手动编辑和清理账号
-- 支持四种导入方式：本地 CPA JSON 文件导入、远程 CPA 服务器导入、`sub2api` 服务器导入、`access_token` 导入
-- 支持在设置页配置 `sub2api` 服务器，筛选并批量导入其中的 OpenAI OAuth 账号
+环境变量可参考 `.env.example`。生产环境必须替换 `MIAOWAZZIMAGE_AUTH_KEY`、`APP_JWT_SECRET`、数据库、Redis 和 R2 配置。
 
-### 实验性 / 规划中
+## 常用配置
 
-- `/v1/complete` 文本补全与流式输出已实现，但仍在测试，目前会出现对话重复的问题，请谨慎测试使用
-- 详细状态说明见：[功能清单](./docs/feature-status.en.md)
-
-## Screenshots
-
-文生图界面：
-
-![image](assets/image.png)
-
-编辑图：
-
-![image](assets/image_edit.png)
-
-Cherry Studio 中使用，支持作为绘图接口接入：
-
-![image](assets/chery_studio.png)
-
-号池管理：
-
-![image](assets/account_pool.png)
-
-New Api 接入：
-
-![image](assets/new_api.png)
+- `MIAOWAZZIMAGE_AUTH_KEY`：兼容旧密钥登录配置，也是首次创建默认管理员时的备用密码来源。
+- `APP_ADMIN_USERNAME`：默认管理员用户名，默认 `admin`。
+- `APP_ADMIN_PASSWORD`：默认管理员初始密码，不设置时使用 `MIAOWAZZIMAGE_AUTH_KEY`。
+- `APP_JWT_SECRET`：登录 JWT 签名密钥，生产环境必须使用长随机值。
+- `DATABASE_URL`：PostgreSQL 或 SQLite 连接串。
+- `REDIS_URL`：Redis 连接串。
+- `R2_ENDPOINT_URL`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`：Cloudflare R2 配置。
 
 ## API
 
-所有 AI 接口都需要请求头：
+图片生成接口兼容 OpenAI 风格：
 
-```http
-Authorization: Bearer <auth-key>
+```text
+POST /v1/images/generations
+POST /v1/images/edits
+GET  /v1/models
 ```
 
-<details>
-<summary><code>GET /v1/models</code></summary>
-<br>
+前端运营接口位于 `/api/*`，包括用户管理、API Key、图片任务、图片管理和日志管理。
 
-返回当前暴露的图片模型列表。
+## 部署说明
 
-```bash
-curl http://localhost:8000/v1/models \
-  -H "Authorization: Bearer <auth-key>"
-```
+正式部署建议：
 
-<details>
-<summary>说明</summary>
-<br>
-
-| 字段   | 说明                                                                                                         |
-|:-----|:-----------------------------------------------------------------------------------------------------------|
-| 返回模型 | `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` |
-| 接入场景 | 可接入 Cherry Studio、New API 等上游或客户端                                                                          |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/images/generations</code></summary>
-<br>
-
-OpenAI 兼容图片生成接口，用于文生图。
-
-```bash
-curl http://localhost:8000/v1/images/generations \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <auth-key>" \
-  -d '{
-    "model": "gpt-image-2",
-    "prompt": "一只漂浮在太空里的猫",
-    "n": 1,
-    "response_format": "b64_json"
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段                | 说明                                                 |
-|:------------------|:---------------------------------------------------|
-| `model`           | 图片模型，当前可用值以 `/v1/models` 返回结果为准，推荐使用 `gpt-image-2` |
-| `prompt`          | 图片生成提示词                                            |
-| `n`               | 生成数量，当前后端限制为 `1-4`                                 |
-| `response_format` | 当前请求模型中包含该字段，默认值为 `b64_json`                       |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/images/edits</code></summary>
-<br>
-
-OpenAI 兼容图片编辑接口，可上传图片文件，也可按官方 JSON 格式传入图片链接并生成编辑结果。
-
-```bash
-curl http://localhost:8000/v1/images/edits \
-  -H "Authorization: Bearer <auth-key>" \
-  -F "model=gpt-image-2" \
-  -F "prompt=把这张图改成赛博朋克夜景风格" \
-  -F "n=1" \
-  -F "image=@./input.png"
-```
-
-也可以直接传图片 URL：
-
-```bash
-curl http://localhost:8000/v1/images/edits \
-  -H "Authorization: Bearer <auth-key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-image-2",
-    "prompt": "把这张图改成赛博朋克夜景风格",
-    "images": [
-      {"image_url": "https://example.com/input.png"}
-    ]
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段          | 说明                                            |
-|:------------|:----------------------------------------------|
-| `model`     | 图片模型， `gpt-image-2`                           |
-| `prompt`    | 图片编辑提示词                                       |
-| `n`         | 生成数量，当前后端限制为 `1-4`                            |
-| `image`     | 需要编辑的图片文件，使用 multipart/form-data 上传           |
-| `images`    | JSON 图片引用数组，支持 `{"image_url": "https://..."}` |
-| `image_url` | 表单模式下也可直接传图片链接，支持重复字段传多张图                     |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/chat/completions</code></summary>
-<br>
-
-面向图片场景的 Chat Completions 兼容接口，不是完整通用聊天代理。
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <auth-key>" \
-  -d '{
-    "model": "gpt-image-2",
-    "messages": [
-      {
-        "role": "user",
-        "content": "生成一张雨夜东京街头的赛博朋克猫"
-      }
-    ],
-    "n": 1
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段         | 说明                |
-|:-----------|:------------------|
-| `model`    | 图片模型，默认按图片生成场景处理  |
-| `messages` | 消息数组，需要是图片相关请求内容  |
-| `n`        | 生成数量，按当前实现解析为图片数量 |
-| `stream`   | 已实现，但仍在测试         |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/responses</code></summary>
-<br>
-
-面向图片生成工具调用的 Responses API 兼容接口，不是完整通用 Responses API 代理。
-
-```bash
-curl http://localhost:8000/v1/responses \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <auth-key>" \
-  -d '{
-    "model": "gpt-5",
-    "input": "生成一张未来感城市天际线图片",
-    "tools": [
-      {
-        "type": "image_generation"
-      }
-    ]
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段       | 说明                            |
-|:---------|:------------------------------|
-| `model`  | 响应中会回显该模型字段，但图片生成当前仍走图片生成兼容逻辑 |
-| `input`  | 输入内容，需要能解析出图片生成提示词            |
-| `tools`  | 必须包含 `image_generation` 工具请求  |
-| `stream` | 已实现，但仍在测试                     |
-
-<br>
-</details>
-</details>
-
-## 社区支持
-
-学 AI , 上 L 站：[LinuxDO](https://linux.do)
-
-## Contributors
-
-感谢所有为本项目做出贡献的开发者：
-
-<a href="https://github.com/basketikun/chatgpt2api/graphs/contributors">
-  <img alt="Contributors" src="https://contrib.rocks/image?repo=basketikun/chatgpt2api" />
-</a>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/chart?repos=basketikun/chatgpt2api&type=date&legend=top-left)](https://www.star-history.com/?repos=basketikun%2Fchatgpt2api&type=date&legend=top-left)
+- 使用 PostgreSQL 作为主数据库。
+- 使用 Redis 做缓存和后续队列扩展。
+- R2 bucket 保持私有，由后端代理图片访问。
+- 使用 HTTPS 域名并设置 `MIAOWAZZIMAGE_BASE_URL`。
+- 不要提交 `.env`、真实数据库密码、Redis 密码、R2 密钥。

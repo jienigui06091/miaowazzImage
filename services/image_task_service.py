@@ -7,11 +7,13 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
+from services.user_service import create_asset_access_token, user_service
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -61,7 +63,37 @@ def _collect_image_urls(data: list[Any]) -> list[str]:
     return urls
 
 
+def _signed_internal_image_url(url: str, owner_id: str) -> str:
+    value = _clean(url)
+    if not value or "token=" in value:
+        return value
+    parsed = urlparse(value)
+    marker = "/images/"
+    marker_index = str(parsed.path or "").find(marker)
+    if marker_index < 0:
+        return value
+    rel = unquote(str(parsed.path or "")[marker_index + len(marker):]).lstrip("/")
+    if not rel:
+        return value
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["token"] = create_asset_access_token(owner_id=owner_id or "admin", rel=rel)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _signed_task_data(data: object, owner_id: str) -> object:
+    if not isinstance(data, list):
+        return data
+    signed: list[Any] = []
+    for item in data:
+        if isinstance(item, dict) and isinstance(item.get("url"), str):
+            signed.append({**item, "url": _signed_internal_image_url(str(item.get("url") or ""), owner_id)})
+        else:
+            signed.append(item)
+    return signed
+
+
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+    owner_id = _clean(task.get("owner_id")) or "admin"
     item = {
         "id": task.get("id"),
         "status": task.get("status"),
@@ -72,7 +104,7 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         "updated_at": task.get("updated_at"),
     }
     if task.get("data") is not None:
-        item["data"] = task.get("data")
+        item["data"] = _signed_task_data(task.get("data"), owner_id)
     if task.get("error"):
         item["error"] = task.get("error")
     return item
@@ -118,6 +150,8 @@ class ImageTaskService:
             "size": size,
             "response_format": "url",
             "base_url": base_url,
+            "owner_id": _owner_id(identity),
+            "task_id": client_task_id,
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
@@ -140,6 +174,8 @@ class ImageTaskService:
             "size": size,
             "response_format": "url",
             "base_url": base_url,
+            "owner_id": _owner_id(identity),
+            "task_id": client_task_id,
         }
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 
@@ -196,9 +232,13 @@ class ImageTaskService:
                 "mode": mode,
                 "model": _clean(payload.get("model"), "gpt-image-2"),
                 "size": _clean(payload.get("size")),
+                "quota_reserved": 0,
                 "created_at": now,
                 "updated_at": now,
             }
+            if identity.get("role") != "admin":
+                user_service.reserve_quota(dict(identity), 1, reason=f"image_{mode}")
+                task["quota_reserved"] = 1
             self._tasks[key] = task
             self._save_locked()
             should_start = True
@@ -248,6 +288,7 @@ class ImageTaskService:
             )
         except Exception as exc:
             error_message = str(exc) or "image task failed"
+            self._refund_task_quota(key)
             self._update_task(key, status=TASK_STATUS_ERROR, error=error_message, data=[])
             self._log_call(
                 identity,
@@ -259,6 +300,23 @@ class ImageTaskService:
                 status="failed",
                 error=error_message,
             )
+
+    def _refund_task_quota(self, key: str) -> None:
+        with self._lock:
+            task = self._tasks.get(key)
+            if task is None:
+                return
+            quota_reserved = int(task.get("quota_reserved") or 0)
+            if quota_reserved <= 0 or task.get("quota_refunded"):
+                return
+            task["quota_refunded"] = True
+            task["quota_reserved"] = 0
+            owner_id = _clean(task.get("owner_id"))
+        if owner_id:
+            try:
+                user_service.refund_quota(owner_id, quota_reserved, reason="image_task_refund")
+            except Exception:
+                pass
 
     def _log_call(
         self,
@@ -334,6 +392,8 @@ class ImageTaskService:
                 "mode": "edit" if item.get("mode") == "edit" else "generate",
                 "model": _clean(item.get("model"), "gpt-image-2"),
                 "size": _clean(item.get("size")),
+                "quota_reserved": int(item.get("quota_reserved") or 0),
+                "quota_refunded": bool(item.get("quota_refunded")),
                 "created_at": _clean(item.get("created_at"), _now_iso()),
                 "updated_at": _clean(item.get("updated_at"), _clean(item.get("created_at"), _now_iso())),
             }

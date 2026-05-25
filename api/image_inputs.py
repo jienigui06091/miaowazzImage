@@ -250,7 +250,7 @@ def _download_image_url(url: str) -> ImageInput:
     try:
         response = requests.get(
             source,
-            headers={"Accept": "image/*,*/*;q=0.8", "User-Agent": "chatgpt2api image fetcher"},
+            headers={"Accept": "image/*,*/*;q=0.8", "User-Agent": "miaowazzImage image fetcher"},
             timeout=60,
             allow_redirects=True,
             **proxy_settings.build_session_kwargs(),

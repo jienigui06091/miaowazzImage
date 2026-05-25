@@ -16,6 +16,7 @@ from services.protocol import (
     openai_v1_models,
     openai_v1_response,
 )
+from services.user_service import user_service
 
 
 class ImageGenerationRequest(BaseModel):
@@ -63,6 +64,40 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+def _reserve_quota(identity: dict[str, object], amount: int, reason: str) -> dict[str, object] | None:
+    if identity.get("role") == "admin" or amount <= 0:
+        return None
+    try:
+        return user_service.reserve_quota(dict(identity), amount, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
+
+
+def _refund_quota(identity: dict[str, object], reserved: dict[str, object] | None, amount: int) -> None:
+    if not reserved or amount <= 0:
+        return
+    user_id = str(identity.get("id") or "").strip()
+    if not user_id:
+        return
+    try:
+        user_service.refund_quota(user_id, amount, reason="image_api_refund")
+    except Exception:
+        pass
+
+
+async def _run_with_quota(call: LoggedCall, handler, payload: dict[str, object], identity: dict[str, object], amount: int, reason: str):
+    reserved = _reserve_quota(identity, amount, reason)
+    try:
+        result = await call.run(handler, payload)
+    except Exception:
+        _refund_quota(identity, reserved, amount)
+        raise
+    status_code = int(getattr(result, "status_code", 200) or 200)
+    if status_code >= 400:
+        _refund_quota(identity, reserved, amount)
+    return result
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -83,9 +118,10 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
+        payload["owner_id"] = str(identity.get("id") or "")
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        return await call.run(openai_v1_image_generations.handle, payload)
+        return await _run_with_quota(call, openai_v1_image_generations.handle, payload, identity, body.n, "image_generation")
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -100,7 +136,9 @@ def create_router() -> APIRouter:
         await filter_or_log(call, prompt)
         payload["images"] = await read_image_sources(image_sources)
         payload["base_url"] = resolve_image_base_url(request)
-        return await call.run(openai_v1_image_edit.handle, payload)
+        payload["owner_id"] = str(identity.get("id") or "")
+        amount = max(1, int(payload.get("n") or 1))
+        return await _run_with_quota(call, openai_v1_image_edit.handle, payload, identity, amount, "image_edit")
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

@@ -47,7 +47,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       webdav_url: "",
       webdav_username: "",
       webdav_password: "",
-      webdav_root_path: "chatgpt2api/images",
+      webdav_root_path: "miaowazzImage/images",
       public_base_url: "",
     };
   const imageStorageMode: ImageStorageMode = imageStorage.enabled && imageStorage.mode === "both"
@@ -107,7 +107,7 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
       webdav_url: String(imageStorage.webdav_url || ""),
       webdav_username: String(imageStorage.webdav_username || ""),
       webdav_password: String(imageStorage.webdav_password || ""),
-      webdav_root_path: String(imageStorage.webdav_root_path || "chatgpt2api/images"),
+      webdav_root_path: String(imageStorage.webdav_root_path || "miaowazzImage/images"),
       public_base_url: String(imageStorage.public_base_url || ""),
     },
     backup: {
@@ -359,7 +359,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           webdav_url: String(config.image_storage?.webdav_url || "").trim(),
           webdav_username: String(config.image_storage?.webdav_username || "").trim(),
           webdav_password: String(config.image_storage?.webdav_password || "").trim(),
-          webdav_root_path: String(config.image_storage?.webdav_root_path || "chatgpt2api/images").trim(),
+          webdav_root_path: String(config.image_storage?.webdav_root_path || "miaowazzImage/images").trim(),
           public_base_url: String(config.image_storage?.public_base_url || "").trim(),
         },
         backup: {

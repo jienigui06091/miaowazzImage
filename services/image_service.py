@@ -14,6 +14,7 @@ from PIL import Image, ImageOps
 from services.config import config
 from services.image_storage_service import image_storage_service
 from services.image_tags_service import load_tags, remove_tags
+from services.user_service import user_service
 from utils.log import logger
 
 THUMBNAIL_SIZE = (320, 320)
@@ -50,7 +51,13 @@ def _safe_image_path(relative_path: str) -> Path:
     return path
 
 
-def get_image_response(relative_path: str) -> FileResponse | Response:
+def _assert_image_access(relative_path: str, identity: dict[str, object] | None = None, token: str = "") -> None:
+    if not user_service.can_access_asset(identity, _safe_relative_path(relative_path), token):
+        raise HTTPException(status_code=403, detail="image access denied")
+
+
+def get_image_response(relative_path: str, identity: dict[str, object] | None = None, token: str = "") -> FileResponse | Response:
+    _assert_image_access(relative_path, identity, token)
     if image_storage_service.has_local(relative_path):
         return FileResponse(_safe_image_path(relative_path))
     return Response(content=image_storage_service.get_bytes(relative_path), media_type="image/png")
@@ -61,8 +68,14 @@ def _thumbnail_path(relative_path: str) -> Path:
     return config.image_thumbnails_dir / f"{rel}.png"
 
 
-def thumbnail_url(base_url: str, relative_path: str) -> str:
-    return f"{base_url.rstrip('/')}/image-thumbnails/{_safe_relative_path(relative_path)}"
+def thumbnail_url(base_url: str, relative_path: str, owner_id: str = "") -> str:
+    rel = _safe_relative_path(relative_path)
+    url = f"{base_url.rstrip('/')}/image-thumbnails/{rel}"
+    if owner_id:
+        from services.user_service import create_asset_access_token
+
+        url += f"?token={create_asset_access_token(owner_id=owner_id, rel=rel)}"
+    return url
 
 
 def _image_dimensions(path: Path) -> tuple[int, int] | None:
@@ -74,6 +87,8 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
 
 
 def ensure_thumbnail(relative_path: str) -> Path:
+    if not image_storage_service.exists(relative_path):
+        raise HTTPException(status_code=404, detail="image not found")
     target = _thumbnail_path(relative_path)
     source_mtime = 0.0
     source: Path | None = None
@@ -99,11 +114,19 @@ def ensure_thumbnail(relative_path: str) -> Path:
     return target
 
 
-def get_thumbnail_response(relative_path: str) -> FileResponse:
-    return FileResponse(ensure_thumbnail(relative_path))
+def get_thumbnail_response(relative_path: str, identity: dict[str, object] | None = None, token: str = "") -> FileResponse | Response:
+    _assert_image_access(relative_path, identity, token)
+    try:
+        return FileResponse(ensure_thumbnail(relative_path))
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        logger.warning({"event": "image_thumbnail_fallback", "path": _safe_relative_path(relative_path), "error": exc.detail})
+        return get_image_response(relative_path, identity, token)
 
 
-def get_image_download_response(relative_path: str) -> FileResponse:
+def get_image_download_response(relative_path: str, identity: dict[str, object] | None = None, token: str = "") -> FileResponse:
+    _assert_image_access(relative_path, identity, token)
     if image_storage_service.has_local(relative_path):
         path = _safe_image_path(relative_path)
         return FileResponse(path, filename=path.name)
@@ -129,14 +152,12 @@ def cleanup_image_thumbnails() -> int:
     return removed
 
 def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict[str, object]:
-    config.cleanup_old_images()
-    cleanup_image_thumbnails()
     all_tags = load_tags()
     items = [
         {
             **item,
             "url": str(item.get("url") or f"{base_url.rstrip('/')}/images/{item['path']}"),
-            "thumbnail_url": thumbnail_url(base_url, str(item["path"])),
+            "thumbnail_url": thumbnail_url(base_url, str(item["path"]), str(item.get("owner_id") or "admin")),
             "tags": all_tags.get(str(item["path"]), []),
         }
         for item in image_storage_service.list_items(base_url, start_date, end_date)
@@ -306,12 +327,18 @@ def download_images_zip(paths: list[str]) -> io.BytesIO:
         for item in paths:
             rel = _safe_relative_path(item)
             path = (root / rel).resolve()
+            payload: bytes | None = None
             try:
                 path.relative_to(root)
             except ValueError:
                 continue
-            if not path.is_file():
-                continue
+            if path.is_file():
+                payload = path.read_bytes()
+            else:
+                try:
+                    payload = image_storage_service.get_bytes(rel)
+                except Exception:
+                    continue
             name = path.name
             if name in used_names:
                 stem = path.stem
@@ -321,7 +348,7 @@ def download_images_zip(paths: list[str]) -> io.BytesIO:
                     counter += 1
                 name = f"{stem}_{counter}{suffix}"
             used_names.add(name)
-            zf.write(path, name)
+            zf.writestr(name, payload)
             added += 1
     if added == 0:
         raise HTTPException(status_code=404, detail="no images found")

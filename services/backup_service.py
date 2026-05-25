@@ -17,7 +17,6 @@ from curl_cffi import requests
 
 from services.config import BASE_DIR, CONFIG_FILE, DATA_DIR, config, load_backup_state, save_backup_state
 from services.image_storage_service import IMAGE_INDEX_FILE
-from services.image_tags_service import TAGS_FILE
 
 
 def _utc_now() -> datetime:
@@ -47,7 +46,7 @@ def _hmac_sha256(key: bytes, message: str) -> bytes:
 
 def _openssl_encrypt(data: bytes, passphrase: str) -> bytes:
     env = dict(os.environ)
-    env["CHATGPT2API_BACKUP_PASSPHRASE"] = passphrase
+    env["MIAOWAZZIMAGE_BACKUP_PASSPHRASE"] = passphrase
     try:
         result = subprocess.run(
             [
@@ -59,7 +58,7 @@ def _openssl_encrypt(data: bytes, passphrase: str) -> bytes:
                 "-md",
                 "sha256",
                 "-pass",
-                "env:CHATGPT2API_BACKUP_PASSPHRASE",
+                "env:MIAOWAZZIMAGE_BACKUP_PASSPHRASE",
             ],
             input=data,
             stdout=subprocess.PIPE,
@@ -77,7 +76,7 @@ def _openssl_encrypt(data: bytes, passphrase: str) -> bytes:
 
 def _openssl_decrypt(data: bytes, passphrase: str) -> bytes:
     env = dict(os.environ)
-    env["CHATGPT2API_BACKUP_PASSPHRASE"] = passphrase
+    env["MIAOWAZZIMAGE_BACKUP_PASSPHRASE"] = passphrase
     try:
         result = subprocess.run(
             [
@@ -89,7 +88,7 @@ def _openssl_decrypt(data: bytes, passphrase: str) -> bytes:
                 "-md",
                 "sha256",
                 "-pass",
-                "env:CHATGPT2API_BACKUP_PASSPHRASE",
+                "env:MIAOWAZZIMAGE_BACKUP_PASSPHRASE",
             ],
             input=data,
             stdout=subprocess.PIPE,
@@ -646,7 +645,6 @@ class BackupService:
                     _json_bytes(config.get_storage_backend().load_auth_keys()),
                 )
             if include.get("images"):
-                self._add_file_to_archive(archive, TAGS_FILE, "data/image_tags.json")
                 self._add_directory_to_archive(archive, config.images_dir, "data/images")
         return buffer.getvalue()
 

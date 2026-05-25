@@ -11,6 +11,7 @@ from services.log_service import (
     LOG_TYPE_ACCOUNT,
     log_service,
 )
+from services.redis_service import redis_client
 from services.storage.base import StorageBackend
 from utils.helper import anonymize_token
 
@@ -25,6 +26,7 @@ class AccountService:
         self._index = 0
         self._accounts = self._load_accounts()
         self._image_inflight: dict[str, int] = {}
+        self._redis_image_locks: dict[str, str] = {}
         self._cumulative_total = self._load_cumulative_total()
 
     def _get_cumulative_file(self) -> Path:
@@ -124,11 +126,32 @@ class AccountService:
                     raise RuntimeError("no available image quota")
                 tokens = self._list_available_candidate_tokens(excluded_tokens)
                 if tokens:
-                    access_token = tokens[self._index % len(tokens)]
-                    self._index += 1
-                    self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
-                    return access_token
+                    for _ in range(len(tokens)):
+                        access_token = tokens[self._index % len(tokens)]
+                        self._index += 1
+                        lock_value = self._acquire_redis_image_lock(access_token)
+                        if redis_client.enabled and not lock_value:
+                            continue
+                        self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
+                        if lock_value:
+                            self._redis_image_locks[access_token] = lock_value
+                        return access_token
                 self._image_slot_condition.wait(timeout=1.0)
+
+    @staticmethod
+    def _redis_image_lock_key(access_token: str) -> str:
+        import hashlib
+
+        digest = hashlib.sha256(access_token.encode("utf-8")).hexdigest()
+        return f"miaowazzImage:image-account-lock:{digest}"
+
+    def _acquire_redis_image_lock(self, access_token: str) -> str:
+        if not redis_client.enabled:
+            return ""
+        try:
+            return redis_client.acquire_lock(self._redis_image_lock_key(access_token), ttl_seconds=300)
+        except Exception:
+            return "local-fallback"
 
     def release_image_slot(self, access_token: str) -> None:
         if not access_token:
@@ -139,6 +162,9 @@ class AccountService:
                 self._image_inflight.pop(access_token, None)
             else:
                 self._image_inflight[access_token] = current_inflight - 1
+            lock_value = self._redis_image_locks.pop(access_token, "")
+            if lock_value:
+                redis_client.release_lock(self._redis_image_lock_key(access_token), lock_value)
             self._image_slot_condition.notify_all()
 
     def get_available_access_token(self) -> str:

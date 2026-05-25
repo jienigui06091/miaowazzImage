@@ -9,36 +9,39 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { login } from "@/lib/api";
+import { passwordLogin, registerUser } from "@/lib/api";
 import { useRedirectIfAuthenticated } from "@/lib/use-auth-guard";
 import { getDefaultRouteForRole, setStoredAuthSession } from "@/store/auth";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [authKey, setAuthKey] = useState("");
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
   const handleLogin = async () => {
-    const normalizedAuthKey = authKey.trim();
-    if (!normalizedAuthKey) {
-      toast.error("请输入 密钥");
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) {
+      toast.error("请输入用户名和密码");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const data = await login(normalizedAuthKey);
+      const data = mode === "register"
+        ? await registerUser(normalizedUsername, password)
+        : await passwordLogin(normalizedUsername, password);
       await setStoredAuthSession({
-        key: normalizedAuthKey,
-        role: data.role,
-        subjectId: data.subject_id,
-        name: data.name,
+        key: data.token,
+        role: data.user.role,
+        subjectId: data.user.id,
+        name: data.user.username,
       });
-      router.replace(getDefaultRouteForRole(data.role));
+      router.replace(getDefaultRouteForRole(data.user.role));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "登录失败";
-      toast.error(message);
+      toast.error(error instanceof Error ? error.message : mode === "register" ? "注册失败" : "登录失败");
     } finally {
       setIsSubmitting(false);
     }
@@ -64,26 +67,52 @@ export default function LoginPage() {
               <LockKeyhole className="size-5" />
             </div>
             <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight text-stone-950">欢迎回来</h1>
-              <p className="text-sm leading-6 text-stone-500">输入密钥后继续使用账号管理和图片生成功能。</p>
+              <h1 className="text-3xl font-semibold tracking-tight text-stone-950">账号登录</h1>
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-stone-100 p-1 text-sm font-medium text-stone-600">
+            <button
+              type="button"
+              className={`h-10 rounded-xl transition ${mode === "login" ? "bg-white text-stone-950 shadow-sm" : ""}`}
+              onClick={() => setMode("login")}
+            >
+              登录
+            </button>
+            <button
+              type="button"
+              className={`h-10 rounded-xl transition ${mode === "register" ? "bg-white text-stone-950 shadow-sm" : ""}`}
+              onClick={() => setMode("register")}
+            >
+              注册
+            </button>
+          </div>
+
           <div className="space-y-3">
-            <label htmlFor="auth-key" className="block text-sm font-medium text-stone-700">
-              密钥
+            <label htmlFor="username" className="block text-sm font-medium text-stone-700">
+              用户名
             </label>
             <Input
-              id="auth-key"
+              id="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="请输入用户名"
+              className="h-13 rounded-2xl border-stone-200 bg-white px-4"
+            />
+            <label htmlFor="password" className="block text-sm font-medium text-stone-700">
+              密码
+            </label>
+            <Input
+              id="password"
               type="password"
-              value={authKey}
-              onChange={(event) => setAuthKey(event.target.value)}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   void handleLogin();
                 }
               }}
-              placeholder="请输入密钥"
+              placeholder="请输入密码"
               className="h-13 rounded-2xl border-stone-200 bg-white px-4"
             />
           </div>
@@ -94,7 +123,7 @@ export default function LoginPage() {
             disabled={isSubmitting}
           >
             {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
-            登录
+            {mode === "register" ? "注册并登录" : "登录"}
           </Button>
         </CardContent>
       </Card>
