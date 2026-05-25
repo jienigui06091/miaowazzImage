@@ -26,6 +26,7 @@ from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import test_proxy
 from services.redis_service import redis_client
+from services.user_service import user_service
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -58,6 +59,26 @@ class BackupDeleteRequest(BaseModel):
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
 
+    def owner_filter(identity: dict[str, object]) -> str:
+        if identity.get("role") == "admin":
+            return ""
+        return str(identity.get("id") or "").strip()
+
+    def visible_image_rels(identity: dict[str, object]) -> set[str]:
+        return {
+            str(item.get("path") or item.get("rel") or "")
+            for item in image_storage_service.list_items("", owner_id=owner_filter(identity))
+            if str(item.get("path") or item.get("rel") or "")
+        }
+
+    def assert_image_manage_access(identity: dict[str, object], rel: str) -> str:
+        safe_rel = rel.strip().replace("\\", "/").lstrip("/")
+        if not safe_rel:
+            raise HTTPException(status_code=400, detail={"error": "path is required"})
+        if identity.get("role") != "admin" and not user_service.can_access_asset(identity, safe_rel):
+            raise HTTPException(status_code=403, detail={"error": "image access denied"})
+        return safe_rel
+
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
@@ -88,8 +109,8 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/images")
     async def get_images(request: Request, start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip())
+        identity = require_identity(authorization)
+        return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip(), identity=identity)
 
     def optional_identity(authorization: str | None) -> dict[str, object] | None:
         token = extract_bearer_token(authorization)
@@ -110,13 +131,13 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.post("/api/images/delete")
     async def delete_images_endpoint(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return delete_images(body.paths, start_date=body.start_date.strip(), end_date=body.end_date.strip(), all_matching=body.all_matching)
+        identity = require_identity(authorization)
+        return delete_images(body.paths, start_date=body.start_date.strip(), end_date=body.end_date.strip(), all_matching=body.all_matching, identity=identity)
 
     @router.post("/api/images/download")
     async def download_images_endpoint(body: ImageDownloadRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        buf = download_images_zip(body.paths)
+        identity = require_identity(authorization)
+        buf = download_images_zip(body.paths, identity=identity)
         return StreamingResponse(
             buf,
             media_type="application/zip",
@@ -130,13 +151,13 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/logs")
     async def get_logs(type: str = "", start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return {"items": log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())}
+        identity = require_identity(authorization)
+        return {"items": log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip(), owner_id=owner_filter(identity))}
 
     @router.post("/api/logs/delete")
     async def delete_logs(body: LogDeleteRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return log_service.delete(body.ids)
+        identity = require_identity(authorization)
+        return log_service.delete(body.ids, owner_id=owner_filter(identity))
 
     @router.post("/api/proxy/test")
     async def test_proxy_endpoint(body: ProxyTestRequest, authorization: str | None = Header(default=None)):
@@ -239,22 +260,20 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/api/images/tags")
     async def list_image_tags(authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return {"tags": get_all_tags()}
+        identity = require_identity(authorization)
+        return {"tags": get_all_tags(None if identity.get("role") == "admin" else visible_image_rels(identity))}
 
     @router.post("/api/images/tags")
     async def update_image_tags(body: ImageTagsRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        rel = body.path.strip().lstrip("/")
-        if not rel:
-            raise HTTPException(status_code=400, detail={"error": "path is required"})
+        identity = require_identity(authorization)
+        rel = assert_image_manage_access(identity, body.path)
         tags = set_tags(rel, body.tags)
         return {"ok": True, "tags": tags}
 
     @router.delete("/api/images/tags/{tag}")
     async def delete_image_tag(tag: str, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        count = delete_tag(tag)
+        identity = require_identity(authorization)
+        count = delete_tag(tag, None if identity.get("role") == "admin" else visible_image_rels(identity))
         return {"ok": True, "removed_from": count}
 
     @router.get("/api/images/storage")

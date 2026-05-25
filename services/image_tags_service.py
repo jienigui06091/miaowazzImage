@@ -156,17 +156,19 @@ def remove_tags(image_rel: str) -> None:
         session.close()
 
 
-def delete_tag(tag: str) -> int:
+def delete_tag(tag: str, image_rels: set[str] | None = None) -> int:
     value = str(tag or "").strip()
     if not value:
         return 0
+    rel_filter = {_clean_rel(rel) for rel in (image_rels or set()) if _clean_rel(rel)}
     session = _session()
     try:
-        rows = (
-            session.query(ImageTagModel)
-            .filter(ImageTagModel.tag == value, ImageTagModel.deleted_at.is_(None))
-            .all()
-        )
+        query = session.query(ImageTagModel).filter(ImageTagModel.tag == value, ImageTagModel.deleted_at.is_(None))
+        if image_rels is not None:
+            if not rel_filter:
+                return 0
+            query = query.filter(ImageTagModel.image_rel.in_(rel_filter))
+        rows = query.all()
         now = _now()
         affected = {str(row.image_rel) for row in rows}
         for row in rows:
@@ -178,21 +180,22 @@ def delete_tag(tag: str) -> int:
         session.close()
 
 
-def get_all_tags() -> list[str]:
+def get_all_tags(image_rels: set[str] | None = None) -> list[str]:
     global _ALL_TAGS_CACHE
-    if _ALL_TAGS_CACHE and _ALL_TAGS_CACHE[0] > datetime.now().timestamp():
+    if image_rels is None and _ALL_TAGS_CACHE and _ALL_TAGS_CACHE[0] > datetime.now().timestamp():
         return list(_ALL_TAGS_CACHE[1])
+    rel_filter = {_clean_rel(rel) for rel in (image_rels or set()) if _clean_rel(rel)}
+    if image_rels is not None and not rel_filter:
+        return []
     session = _session()
     try:
-        rows = (
-            session.query(ImageTagModel.tag)
-            .filter(ImageTagModel.deleted_at.is_(None))
-            .distinct()
-            .order_by(ImageTagModel.tag.asc())
-            .all()
-        )
+        query = session.query(ImageTagModel.tag).filter(ImageTagModel.deleted_at.is_(None))
+        if image_rels is not None:
+            query = query.filter(ImageTagModel.image_rel.in_(rel_filter))
+        rows = query.distinct().order_by(ImageTagModel.tag.asc()).all()
         result = [str(row[0]) for row in rows]
-        _ALL_TAGS_CACHE = (datetime.now().timestamp() + CACHE_TTL_SECONDS, list(result))
+        if image_rels is None:
+            _ALL_TAGS_CACHE = (datetime.now().timestamp() + CACHE_TTL_SECONDS, list(result))
         return result
     finally:
         session.close()

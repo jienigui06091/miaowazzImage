@@ -22,6 +22,8 @@ const adminNavItems = [
 
 const userNavItems = [
   { href: "/image", label: "画图" },
+  { href: "/image-manager", label: "图片管理" },
+  { href: "/logs", label: "日志管理" },
   { href: "/api-keys", label: "API Key" },
 ];
 

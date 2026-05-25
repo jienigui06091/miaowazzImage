@@ -550,14 +550,17 @@ class ImageStorageService:
         item = self._get_db_item(safe_rel)
         return bool(item and item.get("local") and _is_image_rel(safe_rel) and _local_image_path(safe_rel).is_file())
 
-    def list_items(self, base_url: str, start_date: str = "", end_date: str = "") -> list[dict[str, object]]:
-        cache_key = (str(base_url or ""), str(start_date or ""), str(end_date or ""))
+    def list_items(self, base_url: str, start_date: str = "", end_date: str = "", owner_id: str = "") -> list[dict[str, object]]:
+        owner_filter = str(owner_id or "").strip()
+        cache_key = (str(base_url or ""), str(start_date or ""), str(end_date or ""), owner_filter)
         cached = self._list_cache.get(cache_key)
         if cached and cached[0] > time.time():
             return [dict(item) for item in cached[1]]
         session = SessionLocal()
         try:
             query = session.query(ImageRecordModel).filter(ImageRecordModel.deleted_at.is_(None))
+            if owner_filter:
+                query = query.filter(ImageRecordModel.owner_id == owner_filter)
             if start_date:
                 query = query.filter(ImageRecordModel.date >= start_date)
             if end_date:
@@ -580,15 +583,15 @@ class ImageStorageService:
         finally:
             session.close()
 
-    def delete(self, rel: str) -> bool:
+    def delete(self, rel: str, owner_id: str = "") -> bool:
         safe_rel = _safe_relative_path(rel)
+        owner_filter = str(owner_id or "").strip()
         session = SessionLocal()
         try:
-            row = (
-                session.query(ImageRecordModel)
-                .filter(ImageRecordModel.rel == safe_rel, ImageRecordModel.deleted_at.is_(None))
-                .first()
-            )
+            query = session.query(ImageRecordModel).filter(ImageRecordModel.rel == safe_rel, ImageRecordModel.deleted_at.is_(None))
+            if owner_filter:
+                query = query.filter(ImageRecordModel.owner_id == owner_filter)
+            row = query.first()
             if row is None:
                 return False
             row.deleted_at = datetime.now()

@@ -49,7 +49,7 @@ function getStatus(item: SystemLog) {
   return "-";
 }
 
-function LogsContent() {
+function LogsContent({ isAdmin }: { isAdmin: boolean }) {
   const [items, setItems] = useState<SystemLog[]>([]);
   const [type, setType] = useState<string>(LogType.Call);
   const [startDate, setStartDate] = useState("");
@@ -73,6 +73,12 @@ function LogsContent() {
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const currentPageSelected = currentRows.length > 0 && currentRows.every((item) => selectedSet.has(item.id));
   const allSelected = items.length > 0 && items.every((item) => selectedSet.has(item.id));
+
+  useEffect(() => {
+    if (!isAdmin && type !== LogType.Call) {
+      setType(LogType.Call);
+    }
+  }, [isAdmin, type]);
 
   const loadLogs = async () => {
     setIsLoading(true);
@@ -348,9 +354,9 @@ function LogsContent() {
 }
 
 export default function LogsPage() {
-  const { isCheckingAuth, session } = useAuthGuard(["admin"]);
-  if (isCheckingAuth || !session || session.role !== "admin") {
+  const { isCheckingAuth, session } = useAuthGuard(["admin", "user"]);
+  if (isCheckingAuth || !session) {
     return <div className="flex min-h-[40vh] items-center justify-center"><LoaderCircle className="size-5 animate-spin text-stone-400" /></div>;
   }
-  return <LogsContent />;
+  return <LogsContent isAdmin={session.role === "admin"} />;
 }

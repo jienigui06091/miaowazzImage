@@ -118,12 +118,15 @@ class LogService:
         finally:
             session.close()
 
-    def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200, owner_id: str = "") -> list[dict[str, Any]]:
+        owner_filter = str(owner_id or "").strip()
         session = SessionLocal()
         try:
             query = session.query(OperationLogModel).filter(OperationLogModel.deleted_at.is_(None))
             if type:
                 query = query.filter(OperationLogModel.type == type)
+            if owner_filter:
+                query = query.filter(OperationLogModel.detail.contains(f'"key_id":"{owner_filter}"'))
             if start_date:
                 query = query.filter(OperationLogModel.time >= f"{start_date} 00:00:00")
             if end_date:
@@ -148,17 +151,17 @@ class LogService:
         finally:
             session.close()
 
-    def delete(self, ids: list[str]) -> dict[str, int]:
+    def delete(self, ids: list[str], owner_id: str = "") -> dict[str, int]:
         target_ids = {str(item or "").strip() for item in ids if str(item or "").strip()}
         if not target_ids:
             return {"removed": 0}
+        owner_filter = str(owner_id or "").strip()
         session = SessionLocal()
         try:
-            rows = (
-                session.query(OperationLogModel)
-                .filter(OperationLogModel.id.in_(target_ids), OperationLogModel.deleted_at.is_(None))
-                .all()
-            )
+            query = session.query(OperationLogModel).filter(OperationLogModel.id.in_(target_ids), OperationLogModel.deleted_at.is_(None))
+            if owner_filter:
+                query = query.filter(OperationLogModel.detail.contains(f'"key_id":"{owner_filter}"'))
+            rows = query.all()
             now = datetime.now()
             for row in rows:
                 row.deleted_at = now
