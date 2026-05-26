@@ -2,6 +2,7 @@
 
 import localforage from "localforage";
 
+import { httpRequest } from "@/lib/request";
 import type { ImageModel } from "@/lib/api";
 
 export type ImageConversationMode = "generate" | "edit";
@@ -205,6 +206,17 @@ function pickLatestConversation(current: ImageConversation, next: ImageConversat
   return getTimestamp(next.updatedAt) >= getTimestamp(current.updatedAt) ? next : current;
 }
 
+function mergeImageConversations(...groups: ImageConversation[][]): ImageConversation[] {
+  const conversationMap = new Map<string, ImageConversation>();
+  for (const group of groups) {
+    for (const conversation of group.map(normalizeConversation)) {
+      const current = conversationMap.get(conversation.id);
+      conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
+    }
+  }
+  return sortImageConversations([...conversationMap.values()]);
+}
+
 function queueImageConversationWrite<T>(operation: () => Promise<T>): Promise<T> {
   const result = imageConversationWriteQueue.then(operation);
   imageConversationWriteQueue = result.then(
@@ -222,22 +234,77 @@ async function readStoredImageConversations(): Promise<ImageConversation[]> {
   return items.map(normalizeConversation);
 }
 
+async function writeStoredImageConversations(conversations: ImageConversation[]): Promise<void> {
+  await imageConversationStorage.setItem(currentStorageKey(), sortImageConversations(conversations));
+}
+
+async function fetchRemoteImageConversations(): Promise<ImageConversation[]> {
+  const response = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>> }>(
+    "/api/image-conversations",
+  );
+  return (Array.isArray(response.items) ? response.items : []).map(normalizeConversation);
+}
+
+async function saveRemoteImageConversation(conversation: ImageConversation): Promise<ImageConversation> {
+  const response = await httpRequest<{ item: ImageConversation & Record<string, unknown> }>(
+    "/api/image-conversations",
+    {
+      method: "POST",
+      body: normalizeConversation(conversation),
+    },
+  );
+  return normalizeConversation(response.item);
+}
+
+async function saveRemoteImageConversations(conversations: ImageConversation[]): Promise<ImageConversation[]> {
+  const response = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>> }>(
+    "/api/image-conversations/bulk",
+    {
+      method: "POST",
+      body: { items: conversations.map(normalizeConversation) },
+    },
+  );
+  return (Array.isArray(response.items) ? response.items : []).map(normalizeConversation);
+}
+
+async function deleteRemoteImageConversation(id: string): Promise<void> {
+  await httpRequest(`/api/image-conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function clearRemoteImageConversations(): Promise<void> {
+  await httpRequest("/api/image-conversations/clear", { method: "POST" });
+}
+
 export async function listImageConversations(): Promise<ImageConversation[]> {
-  return sortImageConversations(await readStoredImageConversations());
+  const localItems = await readStoredImageConversations();
+  try {
+    const remoteItems = await fetchRemoteImageConversations();
+    const merged = mergeImageConversations(remoteItems, localItems);
+    const changedItems = merged.filter((item) => {
+      const remote = remoteItems.find((remoteItem) => remoteItem.id === item.id);
+      return !remote || getTimestamp(item.updatedAt) > getTimestamp(remote.updatedAt);
+    });
+    if (changedItems.length > 0) {
+      await saveRemoteImageConversations(changedItems);
+    }
+    await writeStoredImageConversations(merged);
+    return merged;
+  } catch (error) {
+    console.warn("Failed to load remote image conversations", error);
+    return sortImageConversations(localItems);
+  }
 }
 
 export async function saveImageConversations(conversations: ImageConversation[]): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
-    const conversationMap = new Map(items.map((item) => [item.id, item]));
-    for (const conversation of conversations.map(normalizeConversation)) {
-      const current = conversationMap.get(conversation.id);
-      conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
+    const merged = mergeImageConversations(items, conversations);
+    await writeStoredImageConversations(merged);
+    try {
+      await saveRemoteImageConversations(conversations.map(normalizeConversation));
+    } catch (error) {
+      console.warn("Failed to save remote image conversations", error);
     }
-    await imageConversationStorage.setItem(
-      currentStorageKey(),
-      sortImageConversations([...conversationMap.values()]),
-    );
   });
 }
 
@@ -247,11 +314,14 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
     const nextConversation = normalizeConversation(conversation);
     const current = items.find((item) => item.id === nextConversation.id);
     const persistedConversation = current ? pickLatestConversation(current, nextConversation) : nextConversation;
-    const nextItems = sortImageConversations([
-      persistedConversation,
-      ...items.filter((item) => item.id !== persistedConversation.id),
-    ]);
-    await imageConversationStorage.setItem(currentStorageKey(), nextItems);
+    const nextItems = mergeImageConversations(items, [persistedConversation]);
+    await writeStoredImageConversations(nextItems);
+    try {
+      const remoteConversation = await saveRemoteImageConversation(persistedConversation);
+      await writeStoredImageConversations(mergeImageConversations(nextItems, [remoteConversation]));
+    } catch (error) {
+      console.warn("Failed to save remote image conversation", error);
+    }
   });
 }
 
@@ -265,23 +335,35 @@ export async function renameImageConversation(id: string, title: string): Promis
       updated,
       ...items.filter((item) => item.id !== id),
     ]);
-    await imageConversationStorage.setItem(currentStorageKey(), nextItems);
+    await writeStoredImageConversations(nextItems);
+    try {
+      await saveRemoteImageConversation(updated);
+    } catch (error) {
+      console.warn("Failed to rename remote image conversation", error);
+    }
   });
 }
 
 export async function deleteImageConversation(id: string): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
-    await imageConversationStorage.setItem(
-      currentStorageKey(),
-      items.filter((item) => item.id !== id),
-    );
+    await writeStoredImageConversations(items.filter((item) => item.id !== id));
+    try {
+      await deleteRemoteImageConversation(id);
+    } catch (error) {
+      console.warn("Failed to delete remote image conversation", error);
+    }
   });
 }
 
 export async function clearImageConversations(): Promise<void> {
   await queueImageConversationWrite(async () => {
     await imageConversationStorage.removeItem(currentStorageKey());
+    try {
+      await clearRemoteImageConversations();
+    } catch (error) {
+      console.warn("Failed to clear remote image conversations", error);
+    }
   });
 }
 
