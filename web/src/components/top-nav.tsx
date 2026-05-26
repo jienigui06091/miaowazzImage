@@ -71,7 +71,7 @@ export function TopNav() {
   const displayName = session.name.trim() || roleLabel;
 
   return (
-    <header className="border-b border-stone-100/50 dark:border-white/10">
+    <header className="sticky top-0 z-40 border-b border-stone-100/60 bg-[rgba(248,244,238,0.86)] backdrop-blur-xl dark:border-white/10 dark:bg-stone-950/72">
       <div className="flex min-h-12 flex-col gap-1 px-3 py-2 sm:h-12 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-0">
         <div className="flex items-center justify-between gap-2 sm:justify-start sm:gap-3">
           <Link
