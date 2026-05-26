@@ -49,6 +49,12 @@ def _owner_id(identity: dict[str, object]) -> str:
     return _clean(identity.get("id")) or "anonymous"
 
 
+def _account_hashes(identity: dict[str, object]) -> list[str] | None:
+    if identity.get("role") == "admin":
+        return None
+    return list(user_service.account_hashes_for_user(_owner_id(identity)))
+
+
 def _task_key(owner_id: str, task_id: str) -> str:
     return f"{owner_id}:{task_id}"
 
@@ -153,6 +159,9 @@ class ImageTaskService:
             "owner_id": _owner_id(identity),
             "task_id": client_task_id,
         }
+        hashes = _account_hashes(identity)
+        if hashes is not None:
+            payload["account_hashes"] = hashes
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
     def submit_edit(
@@ -177,6 +186,9 @@ class ImageTaskService:
             "owner_id": _owner_id(identity),
             "task_id": client_task_id,
         }
+        hashes = _account_hashes(identity)
+        if hashes is not None:
+            payload["account_hashes"] = hashes
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:

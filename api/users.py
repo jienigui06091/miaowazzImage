@@ -26,6 +26,10 @@ class QuotaGrantRequest(BaseModel):
     note: str = ""
 
 
+class UserAccountBindingRequest(BaseModel):
+    access_tokens: list[str] = []
+
+
 class APIKeyCreateRequest(BaseModel):
     name: str = ""
 
@@ -134,6 +138,27 @@ def create_router() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         return result
+
+    @router.get("/api/admin/users/{user_id}/accounts")
+    async def list_user_accounts(user_id: str, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"items": await run_in_threadpool(user_service.list_user_account_bindings, user_id)}
+
+    @router.post("/api/admin/users/{user_id}/accounts")
+    async def set_user_accounts(user_id: str, body: UserAccountBindingRequest, authorization: str | None = Header(default=None)):
+        admin = require_admin(authorization)
+        try:
+            items = await run_in_threadpool(
+                user_service.set_user_account_bindings,
+                user_id,
+                body.access_tokens,
+                created_by=str(admin.get("id") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        users = await run_in_threadpool(user_service.list_users)
+        user = next((item for item in users if str(item.get("id") or "") == user_id), None)
+        return {"items": items, "user": user}
 
     @router.get("/api/admin/users/{user_id}/quota-records")
     async def list_user_quota_records(user_id: str, authorization: str | None = Header(default=None)):

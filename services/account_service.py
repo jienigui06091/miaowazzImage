@@ -73,6 +73,12 @@ class AccountService:
             return True
         return int(account.get("quota") or 0) > 0
 
+    @staticmethod
+    def token_hash(access_token: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(str(access_token or "").encode("utf-8")).hexdigest()
+
     def _normalize_account(self, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
@@ -101,30 +107,34 @@ class AccountService:
         with self._lock:
             return list(self._accounts)
 
-    def _list_ready_candidate_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
+    def _list_ready_candidate_tokens(self, excluded_tokens: set[str] | None = None, allowed_token_hashes: set[str] | None = None) -> list[str]:
         excluded = set(excluded_tokens or set())
+        allowed_hashes = set(allowed_token_hashes) if allowed_token_hashes is not None else None
         return [
             token
             for item in self._accounts.values()
             if self._is_image_account_available(item)
                and (token := item.get("access_token") or "")
                and token not in excluded
+               and (allowed_hashes is None or self.token_hash(token) in allowed_hashes)
         ]
 
-    def _list_available_candidate_tokens(self, excluded_tokens: set[str] | None = None) -> list[str]:
+    def _list_available_candidate_tokens(self, excluded_tokens: set[str] | None = None, allowed_token_hashes: set[str] | None = None) -> list[str]:
         max_concurrency = max(1, int(config.image_account_concurrency or 1))
         return [
             token
-            for token in self._list_ready_candidate_tokens(excluded_tokens)
+            for token in self._list_ready_candidate_tokens(excluded_tokens, allowed_token_hashes)
             if int(self._image_inflight.get(token, 0)) < max_concurrency
         ]
 
-    def _acquire_next_candidate_token(self, excluded_tokens: set[str] | None = None) -> str:
+    def _acquire_next_candidate_token(self, excluded_tokens: set[str] | None = None, allowed_token_hashes: set[str] | None = None) -> str:
         with self._image_slot_condition:
             while True:
-                if not self._list_ready_candidate_tokens(excluded_tokens):
+                if allowed_token_hashes is not None and not allowed_token_hashes:
+                    raise RuntimeError("no assigned image account")
+                if not self._list_ready_candidate_tokens(excluded_tokens, allowed_token_hashes):
                     raise RuntimeError("no available image quota")
-                tokens = self._list_available_candidate_tokens(excluded_tokens)
+                tokens = self._list_available_candidate_tokens(excluded_tokens, allowed_token_hashes)
                 if tokens:
                     for _ in range(len(tokens)):
                         access_token = tokens[self._index % len(tokens)]
@@ -167,10 +177,10 @@ class AccountService:
                 redis_client.release_lock(self._redis_image_lock_key(access_token), lock_value)
             self._image_slot_condition.notify_all()
 
-    def get_available_access_token(self) -> str:
+    def get_available_access_token(self, allowed_token_hashes: set[str] | None = None) -> str:
         attempted_tokens: set[str] = set()
         while True:
-            access_token = self._acquire_next_candidate_token(excluded_tokens=attempted_tokens)
+            access_token = self._acquire_next_candidate_token(excluded_tokens=attempted_tokens, allowed_token_hashes=allowed_token_hashes)
             attempted_tokens.add(access_token)
             try:
                 account = self.fetch_remote_info(access_token, "get_available_access_token")
@@ -234,6 +244,10 @@ class AccountService:
     def list_accounts(self) -> list[dict]:
         with self._lock:
             return [dict(item) for item in self._accounts.values()]
+
+    def list_account_hashes(self) -> set[str]:
+        with self._lock:
+            return {self.token_hash(token) for token in self._accounts}
 
     def list_limited_tokens(self) -> list[str]:
         with self._lock:

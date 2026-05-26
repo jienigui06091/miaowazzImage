@@ -199,12 +199,16 @@ def response_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         images = encode_images([(image_data, "image.png", mime_type)])
     else:
         images = None
+    raw_hashes = body.get("account_hashes")
+    account_hashes = {str(item) for item in raw_hashes} if isinstance(raw_hashes, (list, set, tuple)) else None
     image_outputs = stream_image_outputs_with_pool(ConversationRequest(
         prompt=prompt,
         model=model,
         size=None if images else "1:1",
         response_format="b64_json",
         images=images,
+        owner_id=str(body.get("owner_id") or ""),
+        account_hashes=account_hashes,
     ))
     yield from stream_image_response(image_outputs, prompt, model)
 

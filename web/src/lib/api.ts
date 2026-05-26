@@ -235,8 +235,17 @@ export type OperationUser = {
   role: AuthRole;
   status: "active" | "disabled";
   image_quota: number;
+  assigned_account_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type UserAccountBinding = {
+  id: string;
+  user_id: string;
+  account_hash: string;
+  account: Account | null;
+  created_at?: string | null;
 };
 
 export type PasswordAuthResponse = {
@@ -371,6 +380,17 @@ export async function grantOperationUserQuota(userId: string, amount: number, no
   return httpRequest<{ user: OperationUser; record: Record<string, unknown> }>(`/api/admin/users/${userId}/quota`, {
     method: "POST",
     body: { amount, note },
+  });
+}
+
+export async function fetchOperationUserAccounts(userId: string) {
+  return httpRequest<{ items: UserAccountBinding[] }>(`/api/admin/users/${userId}/accounts`);
+}
+
+export async function setOperationUserAccounts(userId: string, accessTokens: string[]) {
+  return httpRequest<{ items: UserAccountBinding[]; user: OperationUser | null }>(`/api/admin/users/${userId}/accounts`, {
+    method: "POST",
+    body: { access_tokens: accessTokens },
   });
 }
 

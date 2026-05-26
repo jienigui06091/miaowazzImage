@@ -17,6 +17,7 @@ from services.protocol import (
     openai_v1_response,
 )
 from services.user_service import user_service
+from utils.helper import is_image_chat_request
 
 
 class ImageGenerationRequest(BaseModel):
@@ -73,6 +74,15 @@ def _reserve_quota(identity: dict[str, object], amount: int, reason: str) -> dic
         raise HTTPException(status_code=402, detail={"error": str(exc)}) from exc
 
 
+def _apply_user_account_scope(payload: dict[str, object], identity: dict[str, object]) -> None:
+    if identity.get("role") == "admin":
+        return
+    account_hashes = user_service.account_hashes_for_user(str(identity.get("id") or ""))
+    if not account_hashes:
+        raise HTTPException(status_code=403, detail={"error": "no assigned image account"})
+    payload["account_hashes"] = list(account_hashes)
+
+
 def _refund_quota(identity: dict[str, object], reserved: dict[str, object] | None, amount: int) -> None:
     if not reserved or amount <= 0:
         return
@@ -119,6 +129,7 @@ def create_router() -> APIRouter:
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         payload["owner_id"] = str(identity.get("id") or "")
+        _apply_user_account_scope(payload, identity)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
         return await _run_with_quota(call, openai_v1_image_generations.handle, payload, identity, body.n, "image_generation")
@@ -137,6 +148,7 @@ def create_router() -> APIRouter:
         payload["images"] = await read_image_sources(image_sources)
         payload["base_url"] = resolve_image_base_url(request)
         payload["owner_id"] = str(identity.get("id") or "")
+        _apply_user_account_scope(payload, identity)
         amount = max(1, int(payload.get("n") or 1))
         return await _run_with_quota(call, openai_v1_image_edit.handle, payload, identity, amount, "image_edit")
 
@@ -144,6 +156,9 @@ def create_router() -> APIRouter:
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
+        payload["owner_id"] = str(identity.get("id") or "")
+        if is_image_chat_request(payload):
+            _apply_user_account_scope(payload, identity)
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
         call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", request_text=request_preview)
@@ -154,6 +169,9 @@ def create_router() -> APIRouter:
     async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
+        payload["owner_id"] = str(identity.get("id") or "")
+        if not openai_v1_response.is_text_response_request(payload):
+            _apply_user_account_scope(payload, identity)
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("input"), payload.get("instructions"))
         call = LoggedCall(identity, "/v1/responses", model, "Responses", request_text=request_preview)

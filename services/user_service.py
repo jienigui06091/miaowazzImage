@@ -80,6 +80,20 @@ class GeneratedAssetModel(Base):
     __table_args__ = (UniqueConstraint("user_id", "r2_object_key", name="uq_generated_asset_owner_key"),)
 
 
+class UserAccountBindingModel(Base):
+    __tablename__ = "operation_user_account_bindings"
+
+    id = Column(String(32), primary_key=True)
+    user_id = Column(String(32), ForeignKey("operation_users.id"), nullable=False, index=True)
+    account_hash = Column(String(128), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(32), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (UniqueConstraint("user_id", "account_hash", name="uq_user_account_binding"),)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -103,6 +117,10 @@ def _json_dumps(data: dict[str, Any]) -> bytes:
 
 def _hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def hash_account_token(raw_token: str) -> str:
+    return hashlib.sha256(str(raw_token or "").encode("utf-8")).hexdigest()
 
 
 def hash_password(password: str) -> str:
@@ -189,12 +207,31 @@ def _clean_username(username: str) -> str:
 
 
 def _public_user(user: UserModel) -> dict[str, Any]:
+    assigned_count = 0
+    try:
+        from services.account_service import account_service
+
+        known_hashes = account_service.list_account_hashes()
+        session = SessionLocal()
+        try:
+            assigned_count = len({
+                str(row[0] or "").strip()
+                for row in session.query(UserAccountBindingModel.account_hash)
+                .filter(UserAccountBindingModel.user_id == user.id, UserAccountBindingModel.enabled.is_(True))
+                .all()
+                if str(row[0] or "").strip() in known_hashes
+            })
+        finally:
+            session.close()
+    except Exception:
+        assigned_count = 0
     return {
         "id": user.id,
         "username": user.username,
         "role": user.role,
         "status": user.status,
         "image_quota": int(user.image_quota or 0),
+        "assigned_account_count": int(assigned_count),
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
@@ -371,6 +408,8 @@ class UserService:
     def grant_quota(self, user_id: str, amount: int, *, created_by: str = "", note: str = "") -> dict[str, Any]:
         if int(amount or 0) <= 0:
             raise ValueError("增加额度必须大于 0")
+        if not self.user_has_assigned_accounts(user_id):
+            raise ValueError("please assign at least one image account before granting quota")
         return self._change_quota(user_id, int(amount), reason="admin_grant", created_by=created_by, note=note)
 
     def reserve_quota(self, identity: dict[str, Any], amount: int, *, reason: str = "generate") -> dict[str, Any] | None:
@@ -379,6 +418,8 @@ class UserService:
         user_id = str(identity.get("id") or "").strip()
         if not user_id:
             raise ValueError("用户身份无效")
+        if not self.user_has_assigned_accounts(user_id):
+            raise ValueError("no assigned image account")
         if int(amount or 0) <= 0:
             return None
         return self._change_quota(user_id, -int(amount), reason=reason, created_by=user_id)
@@ -527,6 +568,104 @@ class UserService:
         finally:
             session.close()
 
+    def account_hashes_for_user(self, user_id: str) -> set[str]:
+        owner = str(user_id or "").strip()
+        if not owner:
+            return set()
+        session = self._session()
+        try:
+            rows = (
+                session.query(UserAccountBindingModel.account_hash)
+                .filter(UserAccountBindingModel.user_id == owner, UserAccountBindingModel.enabled.is_(True))
+                .all()
+            )
+            hashes = {str(row[0] or "").strip() for row in rows if str(row[0] or "").strip()}
+            try:
+                from services.account_service import account_service
+
+                return hashes & account_service.list_account_hashes()
+            except Exception:
+                return hashes
+        finally:
+            session.close()
+
+    def user_has_assigned_accounts(self, user_id: str) -> bool:
+        session = self._session()
+        try:
+            user = session.query(UserModel).filter(UserModel.id == str(user_id or "").strip()).first()
+            if user is None:
+                raise ValueError("user not found")
+            if user.role == "admin":
+                return True
+            return bool(self.account_hashes_for_user(user.id))
+        finally:
+            session.close()
+
+    def set_user_account_bindings(self, user_id: str, access_tokens: list[str], *, created_by: str = "") -> list[dict[str, Any]]:
+        from services.account_service import account_service
+
+        target_user_id = str(user_id or "").strip()
+        token_hashes = {hash_account_token(token) for token in access_tokens if str(token or "").strip()}
+        known_hashes = account_service.list_account_hashes()
+        unknown_count = len(token_hashes - known_hashes)
+        if unknown_count:
+            raise ValueError(f"{unknown_count} account(s) are not in the account pool")
+        now = _now()
+        session = self._session()
+        try:
+            user = session.query(UserModel).filter(UserModel.id == target_user_id).first()
+            if user is None:
+                raise ValueError("user not found")
+            if user.role == "admin":
+                return []
+            rows = session.query(UserAccountBindingModel).filter(UserAccountBindingModel.user_id == target_user_id).all()
+            by_hash = {str(row.account_hash): row for row in rows}
+            for account_hash, row in by_hash.items():
+                row.enabled = account_hash in token_hashes
+                row.updated_at = now
+            for account_hash in token_hashes:
+                if account_hash not in by_hash:
+                    session.add(UserAccountBindingModel(
+                        id=_new_id(),
+                        user_id=target_user_id,
+                        account_hash=account_hash,
+                        enabled=True,
+                        created_by=str(created_by or "").strip() or None,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+            session.commit()
+            return self.list_user_account_bindings(target_user_id)
+        finally:
+            session.close()
+
+    def list_user_account_bindings(self, user_id: str) -> list[dict[str, Any]]:
+        from services.account_service import account_service
+
+        target_user_id = str(user_id or "").strip()
+        account_map = {account_service.token_hash(str(item.get("access_token") or "")): item for item in account_service.list_accounts()}
+        session = self._session()
+        try:
+            rows = (
+                session.query(UserAccountBindingModel)
+                .filter(UserAccountBindingModel.user_id == target_user_id, UserAccountBindingModel.enabled.is_(True))
+                .order_by(UserAccountBindingModel.created_at.asc())
+                .all()
+            )
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                account = account_map.get(str(row.account_hash))
+                result.append({
+                    "id": row.id,
+                    "user_id": row.user_id,
+                    "account_hash": row.account_hash,
+                    "account": self._public_bound_account(account) if account else None,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                })
+            return result
+        finally:
+            session.close()
+
     def create_api_key(self, user_id: str, name: str = "") -> tuple[dict[str, Any], str]:
         raw_key = f"sk-user-{secrets.token_urlsafe(32)}"
         now = _now()
@@ -594,6 +733,24 @@ class UserService:
             "enabled": bool(row.enabled),
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+        }
+
+    @staticmethod
+    def _public_bound_account(account: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not account:
+            return None
+        return {
+            "access_token": account.get("access_token"),
+            "email": account.get("email"),
+            "type": account.get("type"),
+            "status": account.get("status"),
+            "quota": int(account.get("quota") or 0),
+            "image_quota_unknown": bool(account.get("image_quota_unknown")),
+            "account_id": account.get("account_id"),
+            "user_id": account.get("user_id"),
+            "success": int(account.get("success") or 0),
+            "fail": int(account.get("fail") or 0),
+            "last_used_at": account.get("last_used_at"),
         }
 
 

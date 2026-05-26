@@ -19,6 +19,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     base_url = str(body.get("base_url") or "") or None
     owner_id = str(body.get("owner_id") or "")
     task_id = str(body.get("task_id") or "")
+    raw_hashes = body.get("account_hashes")
+    account_hashes = {str(item) for item in raw_hashes} if isinstance(raw_hashes, (list, set, tuple)) else None
     outputs = stream_image_outputs_with_pool(ConversationRequest(
         prompt=prompt,
         model=model,
@@ -28,6 +30,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         base_url=base_url,
         owner_id=owner_id,
         task_id=task_id,
+        account_hashes=account_hashes,
         message_as_error=True,
     ))
     if body.get("stream"):

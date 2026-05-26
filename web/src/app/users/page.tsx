@@ -5,11 +5,17 @@ import { LoaderCircle, Plus, UserRoundCog } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  fetchAccounts,
+  fetchOperationUserAccounts,
   fetchOperationUsers,
   grantOperationUserQuota,
+  setOperationUserAccounts,
   setOperationUserStatus,
+  type Account,
   type OperationUser,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -27,18 +33,28 @@ function formatTime(value?: string | null) {
   }).format(date);
 }
 
+function accountTitle(account: Account) {
+  const token = String(account.access_token || "");
+  return account.email || account.account_id || `${token.slice(0, 10)}...${token.slice(-6)}`;
+}
+
 export default function UsersPage() {
   const { isCheckingAuth, session } = useAuthGuard();
   const [items, setItems] = useState<OperationUser[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountTarget, setAccountTarget] = useState<OperationUser | null>(null);
+  const [selectedAccountTokens, setSelectedAccountTokens] = useState<string[]>([]);
   const [quotaInputs, setQuotaInputs] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
+  const [isSavingAccounts, setIsSavingAccounts] = useState(false);
 
   const loadItems = async () => {
     setIsLoading(true);
     try {
-      const data = await fetchOperationUsers();
-      setItems(data.items);
+      const [usersData, accountsData] = await Promise.all([fetchOperationUsers(), fetchAccounts()]);
+      setItems(usersData.items);
+      setAccounts(accountsData.items);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取用户失败");
     } finally {
@@ -72,6 +88,52 @@ export default function UsersPage() {
       toast.error(error instanceof Error ? error.message : "分配额度失败");
     } finally {
       setBusyId("");
+    }
+  };
+
+  const openAccountDialog = async (user: OperationUser) => {
+    setBusyId(user.id);
+    try {
+      const [bindingsData, accountsData] = await Promise.all([
+        fetchOperationUserAccounts(user.id),
+        fetchAccounts(),
+      ]);
+      setAccounts(accountsData.items);
+      setSelectedAccountTokens(
+        bindingsData.items
+          .map((item) => item.account?.access_token)
+          .filter((token): token is string => typeof token === "string" && token.length > 0),
+      );
+      setAccountTarget(user);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取账号分配失败");
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const toggleAccountToken = (token: string, checked: boolean) => {
+    setSelectedAccountTokens((current) =>
+      checked ? Array.from(new Set([...current, token])) : current.filter((item) => item !== token),
+    );
+  };
+
+  const saveAccountBindings = async () => {
+    if (!accountTarget) return;
+    setIsSavingAccounts(true);
+    try {
+      const data = await setOperationUserAccounts(accountTarget.id, selectedAccountTokens);
+      if (data.user) {
+        patchUser(data.user);
+      } else {
+        patchUser({ ...accountTarget, assigned_account_count: selectedAccountTokens.length });
+      }
+      setAccountTarget(null);
+      toast.success("账号分配已保存");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存账号分配失败");
+    } finally {
+      setIsSavingAccounts(false);
     }
   };
 
@@ -115,6 +177,7 @@ export default function UsersPage() {
             <tr>
               <th className="px-4 py-3 font-medium">用户名</th>
               <th className="px-4 py-3 font-medium">状态</th>
+              <th className="px-4 py-3 font-medium">账号</th>
               <th className="px-4 py-3 font-medium">额度</th>
               <th className="px-4 py-3 font-medium">注册时间</th>
               <th className="px-4 py-3 text-right font-medium">分配额度</th>
@@ -124,13 +187,13 @@ export default function UsersPage() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td className="px-4 py-8 text-center text-stone-400" colSpan={6}>
+                <td className="px-4 py-8 text-center text-stone-400" colSpan={7}>
                   <LoaderCircle className="mx-auto size-5 animate-spin" />
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-4 py-8 text-center text-stone-400" colSpan={6}>
+                <td className="px-4 py-8 text-center text-stone-400" colSpan={7}>
                   暂无用户
                 </td>
               </tr>
@@ -139,6 +202,7 @@ export default function UsersPage() {
                 <tr key={item.id} className="border-t border-stone-100 dark:border-white/10">
                   <td className="px-4 py-3 font-medium text-stone-900 dark:text-stone-100">{item.username}</td>
                   <td className="px-4 py-3 text-stone-600 dark:text-stone-300">{item.status === "active" ? "启用" : "禁用"}</td>
+                  <td className="px-4 py-3 text-stone-600 dark:text-stone-300">{item.role === "admin" ? "全部号池" : `${item.assigned_account_count || 0} 个`}</td>
                   <td className="px-4 py-3 text-stone-900 dark:text-stone-100">{item.image_quota}</td>
                   <td className="px-4 py-3 text-stone-500">{formatTime(item.created_at)}</td>
                   <td className="px-4 py-3">
@@ -156,9 +220,16 @@ export default function UsersPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Button variant="outline" className="h-9 rounded-lg" onClick={() => void handleToggleStatus(item)} disabled={busyId === item.id}>
-                      {item.status === "active" ? "禁用" : "启用"}
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      {item.role !== "admin" ? (
+                        <Button variant="outline" className="h-9 rounded-lg" onClick={() => void openAccountDialog(item)} disabled={busyId === item.id}>
+                          分配账号
+                        </Button>
+                      ) : null}
+                      <Button variant="outline" className="h-9 rounded-lg" onClick={() => void handleToggleStatus(item)} disabled={busyId === item.id}>
+                        {item.status === "active" ? "禁用" : "启用"}
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -166,7 +237,44 @@ export default function UsersPage() {
           </tbody>
         </table>
       </div>
+
+      <Dialog open={Boolean(accountTarget)} onOpenChange={(open) => (!open ? setAccountTarget(null) : null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>分配账号 - {accountTarget?.username}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {accounts.length === 0 ? (
+              <div className="rounded-xl border border-stone-200 p-6 text-center text-sm text-stone-500">暂无号池账号</div>
+            ) : (
+              accounts.map((account) => {
+                const token = account.access_token;
+                const checked = selectedAccountTokens.includes(token);
+                return (
+                  <label key={token} className="flex cursor-pointer items-center gap-3 rounded-xl border border-stone-200 p-3 hover:bg-stone-50">
+                    <Checkbox checked={checked} onCheckedChange={(value) => toggleAccountToken(token, Boolean(value))} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-stone-900">{accountTitle(account)}</div>
+                      <div className="text-xs text-stone-500">
+                        状态 {account.status} · 额度 {account.image_quota_unknown ? "未知" : account.quota} · 成功 {account.success || 0}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={() => setAccountTarget(null)} disabled={isSavingAccounts}>
+              取消
+            </Button>
+            <Button className="rounded-xl bg-stone-950 text-white" onClick={() => void saveAccountBindings()} disabled={isSavingAccounts}>
+              {isSavingAccounts ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
-

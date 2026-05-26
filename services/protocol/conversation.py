@@ -221,6 +221,7 @@ class ConversationRequest:
     base_url: str | None = None
     owner_id: str = ""
     task_id: str = ""
+    account_hashes: set[str] | None = None
     message_as_error: bool = False
 
 
@@ -624,7 +625,7 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
     for index in range(1, request.n + 1):
         while True:
             try:
-                token = account_service.get_available_access_token()
+                token = account_service.get_available_access_token(request.account_hashes)
             except RuntimeError as exc:
                 if emitted:
                     return
