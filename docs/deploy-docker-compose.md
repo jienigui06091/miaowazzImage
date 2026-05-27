@@ -166,8 +166,15 @@ Update:
 
 ```bash
 cd /opt/miaowazzImage
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+bash scripts/update-deploy.sh
+```
+
+The update script pulls the latest code, rebuilds the Docker image, and restarts the app. It does not create or modify `.env`, `config.json`, or `data/`.
+
+If you use a different Compose file, pass it with an environment variable:
+
+```bash
+COMPOSE_FILE=docker-compose.prod.yml bash scripts/update-deploy.sh
 ```
 
 Restart:
