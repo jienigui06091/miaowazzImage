@@ -78,9 +78,8 @@ def _apply_user_account_scope(payload: dict[str, object], identity: dict[str, ob
     if identity.get("role") == "admin":
         return
     account_hashes = user_service.account_hashes_for_user(str(identity.get("id") or ""))
-    if not account_hashes:
-        raise HTTPException(status_code=403, detail={"error": "no assigned image account"})
-    payload["account_hashes"] = list(account_hashes)
+    if account_hashes:
+        payload["account_hashes"] = list(account_hashes)
 
 
 def _refund_quota(identity: dict[str, object], reserved: dict[str, object] | None, amount: int) -> None:

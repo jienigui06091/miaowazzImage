@@ -52,7 +52,8 @@ def _owner_id(identity: dict[str, object]) -> str:
 def _account_hashes(identity: dict[str, object]) -> list[str] | None:
     if identity.get("role") == "admin":
         return None
-    return list(user_service.account_hashes_for_user(_owner_id(identity)))
+    hashes = list(user_service.account_hashes_for_user(_owner_id(identity)))
+    return hashes or None
 
 
 def _task_key(owner_id: str, task_id: str) -> str:

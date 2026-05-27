@@ -14,10 +14,11 @@ const adminNavItems = [
   { href: "/image", label: "画图" },
   { href: "/users", label: "用户管理" },
   { href: "/accounts", label: "号池管理" },
+  { href: "/redeem-codes", label: "兑换码" },
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
-  { href: "/password", label: "修改密码" },
+  { href: "/profile", label: "个人信息" },
   { href: "/settings", label: "设置" },
 ];
 
@@ -26,7 +27,7 @@ const userNavItems = [
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
   { href: "/api-keys", label: "API Key" },
-  { href: "/password", label: "修改密码" },
+  { href: "/profile", label: "个人信息" },
 ];
 
 export function TopNav() {

@@ -449,8 +449,6 @@ class UserService:
     def grant_quota(self, user_id: str, amount: int, *, created_by: str = "", note: str = "") -> dict[str, Any]:
         if int(amount or 0) <= 0:
             raise ValueError("增加额度必须大于 0")
-        if not self.user_has_assigned_accounts(user_id):
-            raise ValueError("please assign at least one image account before granting quota")
         return self._change_quota(user_id, int(amount), reason="admin_grant", created_by=created_by, note=note)
 
     def reserve_quota(self, identity: dict[str, Any], amount: int, *, reason: str = "generate") -> dict[str, Any] | None:
@@ -459,8 +457,6 @@ class UserService:
         user_id = str(identity.get("id") or "").strip()
         if not user_id:
             raise ValueError("用户身份无效")
-        if not self.user_has_assigned_accounts(user_id):
-            raise ValueError("no assigned image account")
         if int(amount or 0) <= 0:
             return None
         return self._change_quota(user_id, -int(amount), reason=reason, created_by=user_id)

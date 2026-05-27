@@ -271,6 +271,31 @@ export type PersonalApiKey = {
   last_used_at: string | null;
 };
 
+export type RedeemCode = {
+  id: string;
+  code?: string;
+  code_preview: string;
+  quota_amount: number;
+  status: "active" | "disabled" | "used" | "expired" | string;
+  created_by?: string | null;
+  redeemed_by?: string | null;
+  redeemed_at?: string | null;
+  expires_at?: string | null;
+  note: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type RedeemRecord = {
+  id: string;
+  code_id: string;
+  code_preview: string;
+  user_id: string;
+  quota_amount: number;
+  balance_after: number;
+  created_at?: string | null;
+};
+
 export type RegisterConfig = {
   enabled: boolean;
   mail: {
@@ -348,6 +373,17 @@ export async function changeMyPassword(currentPassword: string, newPassword: str
   });
 }
 
+export async function redeemMyCode(code: string) {
+  return httpRequest<{ user: OperationUser; code: RedeemCode; record: RedeemRecord }>("/api/me/redeem-code", {
+    method: "POST",
+    body: { code },
+  });
+}
+
+export async function fetchMyRedeemRecords() {
+  return httpRequest<{ items: RedeemRecord[] }>("/api/me/redeem-records");
+}
+
 export async function fetchMyApiKeys() {
   return httpRequest<{ items: PersonalApiKey[] }>("/api/me/api-keys");
 }
@@ -387,6 +423,29 @@ export async function resetOperationUserPassword(userId: string, newPassword: st
   return httpRequest<{ item: OperationUser }>(`/api/admin/users/${userId}/password`, {
     method: "POST",
     body: { new_password: newPassword },
+  });
+}
+
+export async function fetchRedeemCodes() {
+  return httpRequest<{ items: RedeemCode[] }>("/api/admin/redeem-codes");
+}
+
+export async function generateRedeemCodes(payload: { quota_amount: number; count: number; expires_at?: string; note?: string }) {
+  return httpRequest<{ items: RedeemCode[] }>("/api/admin/redeem-codes", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function disableRedeemCode(codeId: string) {
+  return httpRequest<{ item: RedeemCode }>(`/api/admin/redeem-codes/${codeId}/disable`, {
+    method: "POST",
+  });
+}
+
+export async function deleteRedeemCode(codeId: string) {
+  return httpRequest<{ ok: boolean }>(`/api/admin/redeem-codes/${codeId}`, {
+    method: "DELETE",
   });
 }
 
