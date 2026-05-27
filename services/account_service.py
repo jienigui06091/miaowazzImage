@@ -93,6 +93,12 @@ class AccountService:
         normalized["image_quota_unknown"] = bool(normalized.get("image_quota_unknown"))
         normalized["email"] = normalized.get("email") or None
         normalized["user_id"] = normalized.get("user_id") or None
+        normalized["export_type"] = normalized.get("export_type") or None
+        normalized["expired"] = normalized.get("expired") or None
+        normalized["id_token"] = normalized.get("id_token") or None
+        normalized["account_id"] = normalized.get("account_id") or None
+        normalized["last_refresh"] = normalized.get("last_refresh") or None
+        normalized["refresh_token"] = normalized.get("refresh_token") or None
         limits_progress = normalized.get("limits_progress")
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         normalized["default_model_slug"] = normalized.get("default_model_slug") or None
@@ -259,8 +265,88 @@ class AccountService:
             ]
 
     def add_account_items(self, items: list[dict]) -> dict:
-        tokens = [str(item.get("access_token") or "").strip() for item in items if isinstance(item, dict)]
-        return self.add_accounts(tokens)
+        account_items = [item for item in items if isinstance(item, dict)]
+        if not account_items:
+            return {"added": 0, "skipped": 0, "items": self.list_accounts()}
+
+        with self._lock:
+            added = 0
+            skipped = 0
+            for item in account_items:
+                access_token = str(item.get("access_token") or item.get("accessToken") or "").strip()
+                if not access_token:
+                    continue
+                current = self._accounts.get(access_token)
+                if current is None:
+                    added += 1
+                    self._cumulative_total += 1
+                    self._save_cumulative_total()
+                    current = {"created_at": self._now()}
+                else:
+                    skipped += 1
+                payload = dict(item)
+                payload.pop("accessToken", None)
+                account = self._normalize_account(
+                    {
+                        **current,
+                        **payload,
+                        "access_token": access_token,
+                        "type": str(payload.get("type") or current.get("type") or "free"),
+                    }
+                )
+                if account is not None:
+                    self._accounts[access_token] = account
+            self._save_accounts()
+            items = [dict(item) for item in self._accounts.values()]
+            log_service.add(
+                LOG_TYPE_ACCOUNT,
+                f"Imported {added} accounts, skipped {skipped}",
+                {"added": added, "skipped": skipped},
+            )
+        return {"added": added, "skipped": skipped, "items": items}
+
+    def build_export_items(self, access_tokens: list[str] | None = None) -> list[dict[str, str]]:
+        target_tokens = [str(token or "").strip() for token in access_tokens or [] if str(token or "").strip()]
+        target_set = set(target_tokens)
+        with self._lock:
+            accounts = [
+                dict(item)
+                for token, item in self._accounts.items()
+                if not target_set or token in target_set
+            ]
+
+        export_items: list[dict[str, str]] = []
+        optional_keys = (
+            "refresh_token",
+            "id_token",
+            "account_id",
+            "email",
+            "expired",
+            "last_refresh",
+            "export_type",
+            "type",
+            "status",
+            "user_id",
+            "default_model_slug",
+            "restore_at",
+            "created_at",
+            "last_used_at",
+        )
+        for account in accounts:
+            access_token = str(account.get("access_token") or "").strip()
+            if not access_token:
+                continue
+            item = {"access_token": access_token}
+            for key in optional_keys:
+                value = str(account.get(key) or "").strip()
+                if value:
+                    item[key] = value
+            for key in ("quota", "success", "fail"):
+                value = account.get(key)
+                if value is not None:
+                    item[key] = str(value)
+            export_items.append(item)
+        return export_items
 
     def add_accounts(self, tokens: list[str]) -> dict:
         tokens = list(dict.fromkeys(token for token in tokens if token))
