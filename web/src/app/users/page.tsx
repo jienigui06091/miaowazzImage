@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LoaderCircle, Plus, UserRoundCog } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LoaderCircle, Plus, UserRoundCog } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   fetchOperationUserAccounts,
   fetchOperationUsers,
   grantOperationUserQuota,
+  resetOperationUserPassword,
   setOperationUserAccounts,
   setOperationUserStatus,
   type Account,
@@ -43,11 +44,15 @@ export default function UsersPage() {
   const [items, setItems] = useState<OperationUser[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountTarget, setAccountTarget] = useState<OperationUser | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<OperationUser | null>(null);
   const [selectedAccountTokens, setSelectedAccountTokens] = useState<string[]>([]);
   const [quotaInputs, setQuotaInputs] = useState<Record<string, string>>({});
+  const [resetPassword, setResetPassword] = useState("");
+  const [showResetPassword, setShowResetPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const [isSavingAccounts, setIsSavingAccounts] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   const loadItems = async () => {
     setIsLoading(true);
@@ -134,6 +139,37 @@ export default function UsersPage() {
       toast.error(error instanceof Error ? error.message : "保存账号分配失败");
     } finally {
       setIsSavingAccounts(false);
+    }
+  };
+
+  const openPasswordDialog = (user: OperationUser) => {
+    setPasswordTarget(user);
+    setResetPassword("");
+    setShowResetPassword(false);
+  };
+
+  const closePasswordDialog = () => {
+    setPasswordTarget(null);
+    setResetPassword("");
+    setShowResetPassword(false);
+  };
+
+  const handleResetPassword = async () => {
+    if (!passwordTarget) return;
+    if (resetPassword.length < 8) {
+      toast.error("密码至少需要 8 个字符");
+      return;
+    }
+    setIsResettingPassword(true);
+    try {
+      const data = await resetOperationUserPassword(passwordTarget.id, resetPassword);
+      patchUser(data.item);
+      closePasswordDialog();
+      toast.success("密码已重置");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重置密码失败");
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
@@ -226,6 +262,10 @@ export default function UsersPage() {
                           分配账号
                         </Button>
                       ) : null}
+                      <Button variant="outline" className="h-9 rounded-lg" onClick={() => openPasswordDialog(item)} disabled={busyId === item.id}>
+                        <KeyRound className="size-4" />
+                        重置密码
+                      </Button>
                       <Button variant="outline" className="h-9 rounded-lg" onClick={() => void handleToggleStatus(item)} disabled={busyId === item.id}>
                         {item.status === "active" ? "禁用" : "启用"}
                       </Button>
@@ -271,6 +311,51 @@ export default function UsersPage() {
             <Button className="rounded-xl bg-stone-950 text-white" onClick={() => void saveAccountBindings()} disabled={isSavingAccounts}>
               {isSavingAccounts ? <LoaderCircle className="size-4 animate-spin" /> : null}
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(passwordTarget)} onOpenChange={(open) => (!open ? closePasswordDialog() : null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重置密码 - {passwordTarget?.username}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label htmlFor="reset-user-password" className="block text-sm font-medium text-stone-700">
+              新密码
+            </label>
+            <div className="relative">
+              <Input
+                id="reset-user-password"
+                type={showResetPassword ? "text" : "password"}
+                value={resetPassword}
+                onChange={(event) => setResetPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void handleResetPassword();
+                  }
+                }}
+                className="h-11 rounded-2xl border-stone-200 bg-white pr-12"
+              />
+              <button
+                type="button"
+                aria-label={showResetPassword ? "隐藏密码" : "显示密码"}
+                className="absolute top-1/2 right-3 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                onClick={() => setShowResetPassword((value) => !value)}
+              >
+                {showResetPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-stone-500">密码至少 8 个字符。保存后，该用户下次登录需要使用新密码。</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="rounded-xl" onClick={closePasswordDialog} disabled={isResettingPassword}>
+              取消
+            </Button>
+            <Button className="rounded-xl bg-stone-950 text-white" onClick={() => void handleResetPassword()} disabled={isResettingPassword}>
+              {isResettingPassword ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              保存新密码
             </Button>
           </DialogFooter>
         </DialogContent>

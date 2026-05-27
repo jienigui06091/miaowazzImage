@@ -17,6 +17,15 @@ class RegisterRequest(PasswordLoginRequest):
     pass
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = ""
+    new_password: str = ""
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str = ""
+
+
 class UserStatusRequest(BaseModel):
     status: str
 
@@ -63,6 +72,20 @@ def create_router() -> APIRouter:
     async def get_me(authorization: str | None = Header(default=None)):
         identity = require_identity(authorization)
         return {"user": identity}
+
+    @router.post("/api/me/password")
+    async def change_my_password(body: ChangePasswordRequest, authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        try:
+            user = await run_in_threadpool(
+                user_service.change_password,
+                str(identity.get("id") or ""),
+                body.current_password,
+                body.new_password,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"user": user}
 
     @router.get("/api/me/quota-records")
     async def get_my_quota_records(authorization: str | None = Header(default=None)):
@@ -120,6 +143,17 @@ def create_router() -> APIRouter:
         if body.status not in {"active", "disabled"}:
             raise HTTPException(status_code=400, detail={"error": "status must be active or disabled"})
         item = await run_in_threadpool(user_service.set_user_status, user_id, body.status)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "用户不存在"})
+        return {"item": item}
+
+    @router.post("/api/admin/users/{user_id}/password")
+    async def reset_user_password(user_id: str, body: ResetPasswordRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            item = await run_in_threadpool(user_service.reset_password, user_id, body.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         if item is None:
             raise HTTPException(status_code=404, detail={"error": "用户不存在"})
         return {"item": item}

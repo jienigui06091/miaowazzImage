@@ -206,6 +206,13 @@ def _clean_username(username: str) -> str:
     return str(username or "").strip().lower()
 
 
+def _validate_password(password: str) -> str:
+    value = str(password or "")
+    if len(value) < 8:
+        raise ValueError("密码至少需要 8 个字符")
+    return value
+
+
 def _public_user(user: UserModel) -> dict[str, Any]:
     assigned_count = 0
     try:
@@ -327,6 +334,40 @@ class UserService:
             if user is None or user.status != "active" or not verify_password(password, str(user.password_hash or "")):
                 raise ValueError("用户名或密码错误")
             return {"token": create_access_token(user), "user": _public_user(user)}
+        finally:
+            session.close()
+
+    def change_password(self, user_id: str, current_password: str, new_password: str) -> dict[str, Any]:
+        next_password = _validate_password(new_password)
+        session = self._session()
+        try:
+            user = session.query(UserModel).filter(UserModel.id == user_id).first()
+            if user is None or user.status != "active":
+                raise ValueError("用户不存在或已禁用")
+            if not verify_password(str(current_password or ""), str(user.password_hash or "")):
+                raise ValueError("当前密码不正确")
+            user.password_hash = hash_password(next_password)
+            user.updated_at = _now()
+            session.commit()
+            session.refresh(user)
+            self._identity_cache.clear()
+            return _public_user(user)
+        finally:
+            session.close()
+
+    def reset_password(self, user_id: str, new_password: str) -> dict[str, Any] | None:
+        next_password = _validate_password(new_password)
+        session = self._session()
+        try:
+            user = session.query(UserModel).filter(UserModel.id == user_id).first()
+            if user is None:
+                return None
+            user.password_hash = hash_password(next_password)
+            user.updated_at = _now()
+            session.commit()
+            session.refresh(user)
+            self._identity_cache.clear()
+            return _public_user(user)
         finally:
             session.close()
 

@@ -341,6 +341,13 @@ export async function fetchMe() {
   return httpRequest<{ user: OperationUser }>("/api/me");
 }
 
+export async function changeMyPassword(currentPassword: string, newPassword: string) {
+  return httpRequest<{ user: OperationUser }>("/api/me/password", {
+    method: "POST",
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
 export async function fetchMyApiKeys() {
   return httpRequest<{ items: PersonalApiKey[] }>("/api/me/api-keys");
 }
@@ -373,6 +380,13 @@ export async function setOperationUserStatus(userId: string, status: "active" | 
   return httpRequest<{ item: OperationUser }>(`/api/admin/users/${userId}/status`, {
     method: "POST",
     body: { status },
+  });
+}
+
+export async function resetOperationUserPassword(userId: string, newPassword: string) {
+  return httpRequest<{ item: OperationUser }>(`/api/admin/users/${userId}/password`, {
+    method: "POST",
+    body: { new_password: newPassword },
   });
 }
 

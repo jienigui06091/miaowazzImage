@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { LoaderCircle, LockKeyhole } from "lucide-react";
+import { Eye, EyeOff, LoaderCircle, LockKeyhole } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { isCheckingAuth } = useRedirectIfAuthenticated();
 
@@ -25,6 +26,10 @@ export default function LoginPage() {
     const normalizedUsername = username.trim();
     if (!normalizedUsername || !password) {
       toast.error("请输入用户名和密码");
+      return;
+    }
+    if (mode === "register" && password.length < 8) {
+      toast.error("密码至少需要 8 个字符");
       return;
     }
 
@@ -102,19 +107,30 @@ export default function LoginPage() {
             <label htmlFor="password" className="block text-sm font-medium text-stone-700">
               密码
             </label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void handleLogin();
-                }
-              }}
-              placeholder="请输入密码"
-              className="h-13 rounded-2xl border-stone-200 bg-white px-4"
-            />
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void handleLogin();
+                  }
+                }}
+                placeholder="请输入密码"
+                className="h-13 rounded-2xl border-stone-200 bg-white px-4 pr-12"
+              />
+              <button
+                type="button"
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                className="absolute top-1/2 right-3 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-stone-500">密码至少 8 个字符</p>
           </div>
 
           <Button

@@ -17,6 +17,7 @@ const adminNavItems = [
   { href: "/register", label: "注册机" },
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
+  { href: "/password", label: "修改密码" },
   { href: "/settings", label: "设置" },
 ];
 
@@ -25,6 +26,7 @@ const userNavItems = [
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
   { href: "/api-keys", label: "API Key" },
+  { href: "/password", label: "修改密码" },
 ];
 
 export function TopNav() {
