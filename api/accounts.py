@@ -195,7 +195,7 @@ def create_router() -> APIRouter:
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"items": account_service.list_accounts()}
+        return {"items": await run_in_threadpool(account_service.list_accounts)}
 
     @router.post("/api/accounts")
     async def create_accounts(body: AccountCreateRequest, authorization: str | None = Header(default=None)):
@@ -205,23 +205,26 @@ def create_router() -> APIRouter:
         tokens = _unique_tokens([*body.tokens, *payload_tokens])
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        if account_payloads:
-            result = account_service.add_account_items(account_payloads)
-            payload_token_set = set(_unique_tokens(payload_tokens))
-            extra_tokens = [token for token in tokens if token not in payload_token_set]
-            if extra_tokens:
-                extra_result = account_service.add_accounts(extra_tokens)
-                result["added"] = int(result.get("added") or 0) + int(extra_result.get("added") or 0)
-                result["skipped"] = int(result.get("skipped") or 0) + int(extra_result.get("skipped") or 0)
-        else:
-            result = account_service.add_accounts(tokens)
-        refresh_result = account_service.refresh_accounts(tokens)
-        return {
-            **result,
-            "refreshed": refresh_result.get("refreshed", 0),
-            "errors": refresh_result.get("errors", []),
-            "items": refresh_result.get("items", result.get("items", [])),
-        }
+        def add_and_refresh_accounts() -> dict[str, Any]:
+            if account_payloads:
+                result = account_service.add_account_items(account_payloads)
+                payload_token_set = set(_unique_tokens(payload_tokens))
+                extra_tokens = [token for token in tokens if token not in payload_token_set]
+                if extra_tokens:
+                    extra_result = account_service.add_accounts(extra_tokens)
+                    result["added"] = int(result.get("added") or 0) + int(extra_result.get("added") or 0)
+                    result["skipped"] = int(result.get("skipped") or 0) + int(extra_result.get("skipped") or 0)
+            else:
+                result = account_service.add_accounts(tokens)
+            refresh_result = account_service.refresh_accounts(tokens)
+            return {
+                **result,
+                "refreshed": refresh_result.get("refreshed", 0),
+                "errors": refresh_result.get("errors", []),
+                "items": refresh_result.get("items", result.get("items", [])),
+            }
+
+        return await run_in_threadpool(add_and_refresh_accounts)
 
     @router.delete("/api/accounts")
     async def delete_accounts(body: AccountDeleteRequest, authorization: str | None = Header(default=None)):
@@ -229,23 +232,23 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        return account_service.delete_accounts(tokens)
+        return await run_in_threadpool(account_service.delete_accounts, tokens)
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         access_tokens = [str(token or "").strip() for token in body.access_tokens if str(token or "").strip()]
         if not access_tokens:
-            access_tokens = account_service.list_tokens()
+            access_tokens = await run_in_threadpool(account_service.list_tokens)
         if not access_tokens:
             raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
-        return account_service.refresh_accounts(access_tokens)
+        return await run_in_threadpool(account_service.refresh_accounts, access_tokens)
 
     @router.post("/api/accounts/export")
     async def export_accounts(body: AccountExportRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
         access_tokens = _unique_tokens(body.access_tokens)
-        items = account_service.build_export_items(access_tokens)
+        items = await run_in_threadpool(account_service.build_export_items, access_tokens)
         if not items:
             raise HTTPException(
                 status_code=400,
@@ -277,10 +280,10 @@ def create_router() -> APIRouter:
         updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items() if value is not None}
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
-        account = account_service.update_account(access_token, updates)
+        account = await run_in_threadpool(account_service.update_account, access_token, updates)
         if account is None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
-        return {"item": account, "items": account_service.list_accounts()}
+        return {"item": account, "items": await run_in_threadpool(account_service.list_accounts)}
 
     @router.get("/api/cpa/pools")
     async def list_cpa_pools(authorization: str | None = Header(default=None)):
