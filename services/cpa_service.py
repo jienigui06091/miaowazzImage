@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +13,7 @@ from curl_cffi.requests import Session
 
 from services.account_service import account_service
 from services.config import DATA_DIR
+from services.config_database import config_database_store
 from services.proxy_service import proxy_settings
 
 
@@ -73,22 +73,16 @@ class CPAConfig:
         self._pools: list[dict] = self._load()
 
     def _load(self) -> list[dict]:
-        if not self._store_file.exists():
-            return []
-        try:
-            raw = json.loads(self._store_file.read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and "base_url" in raw:
-                pool = _normalize_pool(raw)
-                return [pool] if pool["base_url"] else []
-            if isinstance(raw, list):
-                return [_normalize_pool(item) for item in raw if isinstance(item, dict)]
-        except Exception:
-            pass
+        raw = config_database_store.get_with_file_fallback("cpa_config", self._store_file, [])
+        if isinstance(raw, dict) and "base_url" in raw:
+            pool = _normalize_pool(raw)
+            return [pool] if pool["base_url"] else []
+        if isinstance(raw, list):
+            return [_normalize_pool(item) for item in raw if isinstance(item, dict)]
         return []
 
     def _save(self) -> None:
-        self._store_file.parent.mkdir(parents=True, exist_ok=True)
-        self._store_file.write_text(json.dumps(self._pools, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        config_database_store.set("cpa_config", self._pools)
 
     def list_pools(self) -> list[dict]:
         with self._lock:

@@ -95,19 +95,25 @@ class DatabaseStorageBackend(StorageBackend):
     ) -> None:
         session = self.Session()
         try:
-            session.query(model).delete()
+            key_name = target_key or source_key
+            seen_keys: set[str] = set()
             for item in items:
                 if not isinstance(item, dict):
                     continue
                 key_value = str(item.get(source_key) or "").strip()
                 if not key_value:
                     continue
-                session.add(
-                    model(
-                        **{target_key or source_key: key_value},
-                        data=json.dumps(item, ensure_ascii=False),
-                    )
-                )
+                seen_keys.add(key_value)
+                row = session.query(model).filter(getattr(model, key_name) == key_value).first()
+                payload = json.dumps(item, ensure_ascii=False)
+                if row is None:
+                    session.add(model(**{key_name: key_value}, data=payload))
+                else:
+                    row.data = payload
+            if seen_keys:
+                session.query(model).filter(~getattr(model, key_name).in_(seen_keys)).delete(synchronize_session=False)
+            else:
+                session.query(model).delete()
             session.commit()
         except Exception as e:
             session.rollback()

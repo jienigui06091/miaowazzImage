@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 import time
 
+from services.config_database import config_database_store
 from services.storage.base import StorageBackend
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -164,7 +165,8 @@ def _env_value(*names: str) -> str:
 
 def _load_settings() -> LoadedSettings:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    raw_config = _read_json_object(CONFIG_FILE, name="config.json")
+    raw_config = config_database_store.get_with_file_fallback("system_config", CONFIG_FILE, {})
+    raw_config = raw_config if isinstance(raw_config, dict) else {}
     auth_key = _normalize_auth_key(_env_value("MIAOWAZZIMAGE_AUTH_KEY", "CHATGPT2API_AUTH_KEY") or raw_config.get("auth-key"))
     if _is_invalid_auth_key(auth_key):
         raise ValueError(
@@ -200,10 +202,11 @@ class ConfigStore:
             )
 
     def _load(self) -> dict[str, object]:
-        return _read_json_object(self.path, name="config.json")
+        data = config_database_store.get_with_file_fallback("system_config", self.path, {})
+        return data if isinstance(data, dict) else {}
 
     def _save(self) -> None:
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        config_database_store.set("system_config", self.data)
 
     @property
     def auth_key(self) -> str:
@@ -386,12 +389,15 @@ class ConfigStore:
 
 
 def load_backup_state() -> dict[str, object]:
-    return _normalize_backup_state(_read_json_object(BACKUP_STATE_FILE, name="backup_state.json"))
+    data = config_database_store.get_with_file_fallback("backup_state", BACKUP_STATE_FILE, {})
+    normalized = _normalize_backup_state(data if isinstance(data, dict) else {})
+    config_database_store.set("backup_state", normalized)
+    return normalized
 
 
 def save_backup_state(state: dict[str, object]) -> dict[str, object]:
     normalized = _normalize_backup_state(state)
-    BACKUP_STATE_FILE.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    config_database_store.set("backup_state", normalized)
     return normalized
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from services.account_service import account_service
 from services.config import DATA_DIR
+from services.config_database import config_database_store
 from services.register import openai_register
 
 
@@ -49,18 +50,18 @@ class RegisterService:
         self._logs: list[dict] = []
         openai_register.register_log_sink = self._append_log
         self._config = self._load()
+        self._inject_proxy_to_mail()
+        openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads")})
+        self._save()
         if self._config["enabled"]:
             self.start()
 
     def _load(self) -> dict:
-        try:
-            return _normalize(json.loads(self._store_file.read_text(encoding="utf-8")))
-        except Exception:
-            return _normalize({})
+        raw = config_database_store.get_with_file_fallback("register_config", self._store_file, {})
+        return _normalize(raw if isinstance(raw, dict) else {})
 
     def _save(self) -> None:
-        self._store_file.parent.mkdir(parents=True, exist_ok=True)
-        self._store_file.write_text(json.dumps(self._config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        config_database_store.set("register_config", self._config)
 
     def get(self) -> dict:
         with self._lock:
