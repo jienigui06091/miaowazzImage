@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -57,27 +58,21 @@ def _public_row(row: ImageConversationModel) -> dict[str, Any]:
 
 
 def _public_summary(row: ImageConversationModel) -> dict[str, Any]:
-    payload = _public_row(row)
-    turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
-    active_turns = [
-        turn for turn in turns
-        if isinstance(turn, dict) and not bool(turn.get("resultsDeleted"))
-    ]
-    last_turn = next((turn for turn in reversed(turns) if isinstance(turn, dict)), {})
     return {
         "id": row.id,
-        "title": row.title or str(payload.get("title") or ""),
-        "createdAt": str(payload.get("createdAt") or row.created_at.isoformat()),
-        "updatedAt": str(payload.get("updatedAt") or row.updated_at.isoformat()),
-        "turnCount": len(turns),
-        "queued": sum(1 for turn in active_turns if turn.get("status") == "queued"),
-        "running": sum(1 for turn in active_turns if turn.get("status") == "generating"),
-        "lastPrompt": str(last_turn.get("prompt") or "")[:240] if isinstance(last_turn, dict) else "",
+        "title": row.title or "未命名会话",
+        "createdAt": row.created_at.isoformat() if row.created_at else "",
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
+        "turnCount": 0,
+        "queued": 0,
+        "running": 0,
+        "lastPrompt": "",
     }
 
 
 class ImageConversationService:
     def __init__(self) -> None:
+        self._summary_cache: dict[tuple[str, int, str, bool], tuple[float, dict[str, Any]]] = {}
         init_app_database()
         self._ensure_indexes()
 
@@ -91,14 +86,39 @@ class ImageConversationService:
         except Exception:
             pass
 
+    def _cache_key(self, user_id: str, limit: int, cursor: str, summary: bool) -> tuple[str, int, str, bool]:
+        return (str(user_id or "").strip(), int(limit or 30), str(cursor or ""), bool(summary))
+
+    def _invalidate_cache(self, user_id: str) -> None:
+        owner = str(user_id or "").strip()
+        if not owner:
+            self._summary_cache.clear()
+            return
+        for key in list(self._summary_cache):
+            if key[0] == owner:
+                self._summary_cache.pop(key, None)
+
     def list(self, user_id: str, *, limit: int = 30, cursor: str = "", summary: bool = True) -> dict[str, Any]:
         owner = str(user_id or "").strip()
         if not owner:
             return {"items": [], "next_cursor": ""}
         page_size = max(1, min(100, int(limit or 30)))
+        cache_key = self._cache_key(owner, page_size, cursor, summary)
+        if summary:
+            cached = self._summary_cache.get(cache_key)
+            if cached and cached[0] > time.time():
+                return dict(cached[1])
         session = SessionLocal()
         try:
-            query = session.query(ImageConversationModel).filter(ImageConversationModel.user_id == owner, ImageConversationModel.deleted_at.is_(None))
+            columns = (
+                ImageConversationModel.id,
+                ImageConversationModel.user_id,
+                ImageConversationModel.title,
+                ImageConversationModel.created_at,
+                ImageConversationModel.updated_at,
+                ImageConversationModel.deleted_at,
+            ) if summary else (ImageConversationModel,)
+            query = session.query(*columns).filter(ImageConversationModel.user_id == owner, ImageConversationModel.deleted_at.is_(None))
             if cursor:
                 try:
                     cursor_time = datetime.fromisoformat(str(cursor).replace("Z", "+00:00"))
@@ -109,7 +129,10 @@ class ImageConversationService:
             page_rows = rows[:page_size]
             next_cursor = rows[page_size].updated_at.isoformat() if len(rows) > page_size else ""
             mapper = _public_summary if summary else _public_row
-            return {"items": [mapper(row) for row in page_rows], "next_cursor": next_cursor}
+            result = {"items": [mapper(row) for row in page_rows], "next_cursor": next_cursor}
+            if summary:
+                self._summary_cache[cache_key] = (time.time() + 15, result)
+            return result
         finally:
             session.close()
 
@@ -162,6 +185,7 @@ class ImageConversationService:
                 row.deleted_at = None
             session.commit()
             session.refresh(row)
+            self._invalidate_cache(owner)
             return _public_row(row)
         finally:
             session.close()
@@ -189,6 +213,7 @@ class ImageConversationService:
                 return False
             row.deleted_at = _now()
             session.commit()
+            self._invalidate_cache(owner)
             return True
         finally:
             session.close()
@@ -208,6 +233,7 @@ class ImageConversationService:
             for row in rows:
                 row.deleted_at = now
             session.commit()
+            self._invalidate_cache(owner)
             return len(rows)
         finally:
             session.close()
