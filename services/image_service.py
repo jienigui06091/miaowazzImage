@@ -18,6 +18,9 @@ from services.user_service import user_service
 from utils.log import logger
 
 THUMBNAIL_SIZE = (320, 320)
+THUMBNAIL_WARMUP_LIMIT = 36
+_THUMBNAIL_WARMUP_LOCK = threading.Lock()
+_THUMBNAIL_WARMUP_QUEUED: set[str] = set()
 
 
 def _cleanup_empty_dirs(root: Path) -> None:
@@ -114,6 +117,60 @@ def ensure_thumbnail(relative_path: str) -> Path:
     return target
 
 
+def _thumbnail_exists(relative_path: str) -> bool:
+    try:
+        return _thumbnail_path(relative_path).is_file()
+    except HTTPException:
+        return False
+
+
+def _warmup_thumbnail_batch(rels: list[str]) -> None:
+    try:
+        for rel in rels:
+            try:
+                ensure_thumbnail(rel)
+            except Exception as exc:
+                logger.warning({"event": "image_thumbnail_warmup_failed", "path": rel, "error": str(exc)})
+    finally:
+        with _THUMBNAIL_WARMUP_LOCK:
+            for rel in rels:
+                _THUMBNAIL_WARMUP_QUEUED.discard(rel)
+
+
+def queue_thumbnail_warmup(rels: list[str], limit: int = THUMBNAIL_WARMUP_LIMIT) -> int:
+    candidates: list[str] = []
+    with _THUMBNAIL_WARMUP_LOCK:
+        for raw_rel in rels:
+            if len(candidates) >= limit:
+                break
+            try:
+                rel = _safe_relative_path(raw_rel)
+            except HTTPException:
+                continue
+            if rel in _THUMBNAIL_WARMUP_QUEUED or _thumbnail_exists(rel):
+                continue
+            _THUMBNAIL_WARMUP_QUEUED.add(rel)
+            candidates.append(rel)
+    if candidates:
+        threading.Thread(target=_warmup_thumbnail_batch, args=(candidates,), daemon=True).start()
+    return len(candidates)
+
+
+def save_thumbnail_from_bytes(relative_path: str, image_data: bytes) -> Path | None:
+    target = _thumbnail_path(relative_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with Image.open(io.BytesIO(image_data)) as image:
+            image = ImageOps.exif_transpose(image)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+            image.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+            image.save(target, format="PNG", optimize=True)
+        return target
+    except Exception:
+        return None
+
+
 def get_thumbnail_response(relative_path: str, identity: dict[str, object] | None = None, token: str = "") -> FileResponse | Response:
     _assert_image_access(relative_path, identity, token)
     try:
@@ -177,6 +234,7 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "", identit
     groups: dict[str, list[dict[str, object]]] = {}
     for item in items:
         groups.setdefault(str(item["date"]), []).append(item)
+    queue_thumbnail_warmup([str(item["path"]) for item in items])
     return {"items": items, "groups": [{"date": key, "items": value} for key, value in groups.items()]}
 
 

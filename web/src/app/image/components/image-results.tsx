@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Clock3, Download, LoaderCircle, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 
+import { ImageThumbnail, getImageThumbnailUrl } from "@/components/image-thumbnail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ImageConversation, ImageTurnStatus, StoredImage, StoredReferenceImage } from "@/store/image-conversations";
@@ -223,10 +224,12 @@ export function ImageResults({
                               onClick={() => onOpenLightbox(successfulTurnImages, currentIndex)}
                               className="group block aspect-square w-full cursor-zoom-in overflow-hidden rounded-xl sm:aspect-auto"
                             >
-                              <img
+                              <ImageThumbnail
                                 src={imageSrc}
+                                thumbnailSrc={getImageThumbnailUrl(imageSrc)}
                                 alt={`Generated result ${index + 1}`}
-                                className="block h-full w-full object-cover transition duration-200 group-hover:brightness-90 sm:h-auto sm:object-contain"
+                                className="h-full w-full bg-stone-100"
+                                imageClassName="block h-full w-full object-cover transition duration-200 group-hover:brightness-90 sm:h-auto sm:object-contain"
                                 onLoad={(event) => {
                                   updateImageDimensions(
                                     image.id,

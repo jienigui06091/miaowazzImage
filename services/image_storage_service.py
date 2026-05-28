@@ -519,6 +519,12 @@ class ImageStorageService:
                 width=dimensions[0] if dimensions else None,
                 height=dimensions[1] if dimensions else None,
             )
+        try:
+            from services.image_service import save_thumbnail_from_bytes
+
+            save_thumbnail_from_bytes(rel, image_data)
+        except Exception:
+            pass
         self._save_db_item(item)
         return StoredImage(rel=rel, url=self._public_url(rel, base_url, owner_id), storage=str(item["storage"]), size=len(image_data))
 
