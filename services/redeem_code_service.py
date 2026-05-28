@@ -6,9 +6,9 @@ import string
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, text
 
-from services.app_database import Base, SessionLocal, init_app_database
+from services.app_database import Base, SessionLocal, engine, init_app_database
 from services.user_service import QuotaRecordModel, UserModel, _new_id, _now, _public_user, user_service
 
 
@@ -17,6 +17,7 @@ class RedeemCodeModel(Base):
 
     id = Column(String(32), primary_key=True)
     code_hash = Column(String(128), nullable=False, unique=True, index=True)
+    code_value = Column(String(64), nullable=True)
     code_preview = Column(String(32), nullable=False, default="")
     quota_amount = Column(Integer, nullable=False)
     status = Column(String(16), nullable=False, default="active")
@@ -97,11 +98,21 @@ def _status_for_code(item: RedeemCodeModel, now: datetime | None = None) -> str:
 class RedeemCodeService:
     def __init__(self):
         init_app_database()
+        self._ensure_columns()
+
+    def _ensure_columns(self) -> None:
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE operation_redeem_codes ADD COLUMN IF NOT EXISTS code_value VARCHAR(64)"))
+        except Exception:
+            pass
 
     @staticmethod
     def _public_code(item: RedeemCodeModel, *, code: str = "") -> dict[str, Any]:
+        visible_code = code or str(item.code_value or "").strip()
         data = {
             "id": item.id,
+            "code": visible_code,
             "code_preview": item.code_preview,
             "quota_amount": int(item.quota_amount or 0),
             "status": _status_for_code(item),
@@ -113,8 +124,6 @@ class RedeemCodeService:
             "created_at": item.created_at.isoformat() if item.created_at else None,
             "updated_at": item.updated_at.isoformat() if item.updated_at else None,
         }
-        if code:
-            data["code"] = code
         return data
 
     @staticmethod
@@ -159,6 +168,7 @@ class RedeemCodeService:
                 item = RedeemCodeModel(
                     id=_new_id(),
                     code_hash=code_hash,
+                    code_value=code,
                     code_preview=_preview_code(code),
                     quota_amount=amount,
                     status="active",
@@ -177,7 +187,7 @@ class RedeemCodeService:
         finally:
             session.close()
 
-    def list_codes(self, limit: int = 200) -> list[dict[str, Any]]:
+    def list_codes(self, limit: int = 1000) -> list[dict[str, Any]]:
         session = SessionLocal()
         try:
             rows = (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Gift, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { Copy, Download, Gift, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -43,9 +43,10 @@ export default function RedeemCodesPage() {
   const [busyId, setBusyId] = useState("");
 
   const generatedText = useMemo(
-    () => generatedItems.map((item) => `${item.code || ""}\t${item.quota_amount}`).filter((line) => line.trim()).join("\n"),
+    () => generatedItems.map((item) => item.code || "").filter(Boolean).join("\n"),
     [generatedItems],
   );
+  const exportableCodes = useMemo(() => items.map((item) => item.code || "").filter(Boolean), [items]);
 
   const loadItems = async () => {
     setIsLoading(true);
@@ -97,6 +98,32 @@ export default function RedeemCodesPage() {
     toast.success("已复制");
   };
 
+  const handleCopyCode = async (item: RedeemCode) => {
+    const code = item.code || "";
+    if (!code) {
+      toast.error("旧兑换码未保存明文，无法复制");
+      return;
+    }
+    await navigator.clipboard.writeText(code);
+    toast.success("已复制");
+  };
+
+  const handleExportCodes = () => {
+    if (exportableCodes.length === 0) {
+      toast.error("没有可导出的完整兑换码");
+      return;
+    }
+    const blob = new Blob([`${exportableCodes.join("\n")}\n`], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `redeem-codes-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleDisable = async (item: RedeemCode) => {
     setBusyId(item.id);
     try {
@@ -141,7 +168,13 @@ export default function RedeemCodesPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-50">兑换码管理</h1>
         </div>
-        <Gift className="size-6 text-stone-400" />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="h-10 rounded-xl border-stone-200 bg-white" onClick={handleExportCodes} disabled={exportableCodes.length === 0}>
+            <Download className="size-4" />
+            导出 TXT
+          </Button>
+          <Gift className="size-6 text-stone-400" />
+        </div>
       </div>
 
       <div className="mb-5 grid gap-2 rounded-xl border border-stone-200 bg-white p-4 dark:border-white/10 dark:bg-stone-900 sm:grid-cols-[120px_120px_170px_1fr_auto]">
@@ -158,7 +191,7 @@ export default function RedeemCodesPage() {
       {generatedItems.length > 0 ? (
         <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="font-medium">本次生成的兑换码只完整显示一次</div>
+            <div className="font-medium">本次生成的兑换码已保存，可在列表中继续查看和复制</div>
             <Button variant="outline" className="h-9 rounded-lg bg-white" onClick={() => void handleCopyGenerated()}>
               <Copy className="size-4" />
               复制
@@ -197,7 +230,23 @@ export default function RedeemCodesPage() {
             ) : (
               items.map((item) => (
                 <tr key={item.id} className="border-t border-stone-100 dark:border-white/10">
-                  <td className="px-4 py-3 font-medium text-stone-900 dark:text-stone-100">{item.code_preview}</td>
+                  <td className="px-4 py-3 font-medium text-stone-900 dark:text-stone-100">
+                    <div className="flex min-w-[190px] items-center gap-2">
+                      <code className="truncate">{item.code || item.code_preview}</code>
+                      {item.code ? (
+                        <button
+                          type="button"
+                          className="inline-flex size-7 items-center justify-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                          onClick={() => void handleCopyCode(item)}
+                          aria-label="复制兑换码"
+                        >
+                          <Copy className="size-3.5" />
+                        </button>
+                      ) : (
+                        <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-normal text-stone-500">旧码预览</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-stone-900 dark:text-stone-100">{item.quota_amount}</td>
                   <td className="px-4 py-3 text-stone-600 dark:text-stone-300">{statusLabel(item.status)}</td>
                   <td className="px-4 py-3 text-stone-500">{item.redeemed_by || "-"}</td>
