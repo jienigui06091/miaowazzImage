@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict
 
@@ -29,10 +29,28 @@ def create_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/image-conversations")
-    async def list_image_conversations(authorization: str | None = Header(default=None)):
+    async def list_image_conversations(
+        limit: int = Query(default=30, ge=1, le=100),
+        cursor: str = Query(default=""),
+        summary: bool = Query(default=True),
+        authorization: str | None = Header(default=None),
+    ):
         identity = require_identity(authorization)
-        items = await run_in_threadpool(image_conversation_service.list, _owner_id(identity))
-        return {"items": items}
+        return await run_in_threadpool(
+            image_conversation_service.list,
+            _owner_id(identity),
+            limit=limit,
+            cursor=cursor,
+            summary=summary,
+        )
+
+    @router.get("/api/image-conversations/{conversation_id}")
+    async def get_image_conversation(conversation_id: str, authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        item = await run_in_threadpool(image_conversation_service.get, _owner_id(identity), conversation_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"error": "conversation not found"})
+        return {"item": item}
 
     @router.post("/api/image-conversations")
     async def save_image_conversation(body: ImageConversationPayload, authorization: str | None = Header(default=None)):

@@ -47,11 +47,21 @@ export type ImageConversation = {
   createdAt: string;
   updatedAt: string;
   turns: ImageTurn[];
+  isSummary?: boolean;
+  turnCount?: number;
+  queued?: number;
+  running?: number;
+  lastPrompt?: string;
 };
 
 export type ImageConversationStats = {
   queued: number;
   running: number;
+};
+
+export type ImageConversationPage = {
+  items: ImageConversation[];
+  nextCursor: string;
 };
 
 const imageConversationStorage = localforage.createInstance({
@@ -190,6 +200,11 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
     createdAt: String(conversation.createdAt || lastTurn?.createdAt || new Date().toISOString()),
     updatedAt: String(conversation.updatedAt || lastTurn?.createdAt || new Date().toISOString()),
     turns,
+    isSummary: conversation.isSummary === true || (turns.length === 0 && typeof conversation.turnCount === "number"),
+    turnCount: typeof conversation.turnCount === "number" ? conversation.turnCount : turns.length,
+    queued: typeof conversation.queued === "number" ? conversation.queued : undefined,
+    running: typeof conversation.running === "number" ? conversation.running : undefined,
+    lastPrompt: typeof conversation.lastPrompt === "string" ? conversation.lastPrompt : undefined,
   };
 }
 
@@ -238,11 +253,25 @@ async function writeStoredImageConversations(conversations: ImageConversation[])
   await imageConversationStorage.setItem(currentStorageKey(), sortImageConversations(conversations));
 }
 
-async function fetchRemoteImageConversations(): Promise<ImageConversation[]> {
-  const response = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>> }>(
-    "/api/image-conversations",
+async function fetchRemoteImageConversations(cursor = ""): Promise<ImageConversationPage> {
+  const params = new URLSearchParams({ summary: "true", limit: "30" });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  const response = await httpRequest<{ items: Array<ImageConversation & Record<string, unknown>>; next_cursor?: string }>(
+    `/api/image-conversations?${params.toString()}`,
   );
-  return (Array.isArray(response.items) ? response.items : []).map(normalizeConversation);
+  return {
+    items: (Array.isArray(response.items) ? response.items : []).map((item) => normalizeConversation({ ...item, isSummary: true })),
+    nextCursor: String(response.next_cursor || ""),
+  };
+}
+
+async function fetchRemoteImageConversation(id: string): Promise<ImageConversation> {
+  const response = await httpRequest<{ item: ImageConversation & Record<string, unknown> }>(
+    `/api/image-conversations/${encodeURIComponent(id)}`,
+  );
+  return normalizeConversation({ ...response.item, isSummary: false });
 }
 
 async function saveRemoteImageConversation(conversation: ImageConversation): Promise<ImageConversation> {
@@ -276,22 +305,40 @@ async function clearRemoteImageConversations(): Promise<void> {
 }
 
 export async function listImageConversations(): Promise<ImageConversation[]> {
-  const localItems = await readStoredImageConversations();
   try {
-    const remoteItems = await fetchRemoteImageConversations();
-    const merged = mergeImageConversations(remoteItems, localItems);
-    const changedItems = merged.filter((item) => {
-      const remote = remoteItems.find((remoteItem) => remoteItem.id === item.id);
-      return !remote || getTimestamp(item.updatedAt) > getTimestamp(remote.updatedAt);
-    });
-    if (changedItems.length > 0) {
-      await saveRemoteImageConversations(changedItems);
-    }
-    await writeStoredImageConversations(merged);
-    return merged;
+    const page = await fetchRemoteImageConversations();
+    return sortImageConversations(page.items);
   } catch (error) {
     console.warn("Failed to load remote image conversations", error);
+    const localItems = await readStoredImageConversations();
     return sortImageConversations(localItems);
+  }
+}
+
+export async function listImageConversationPage(cursor = ""): Promise<ImageConversationPage> {
+  const page = await fetchRemoteImageConversations(cursor);
+  return {
+    items: sortImageConversations(page.items),
+    nextCursor: page.nextCursor,
+  };
+}
+
+export async function getImageConversation(id: string): Promise<ImageConversation | null> {
+  const conversationId = String(id || "").trim();
+  if (!conversationId) {
+    return null;
+  }
+  try {
+    const remoteItem = await fetchRemoteImageConversation(conversationId);
+    await queueImageConversationWrite(async () => {
+      const items = await readStoredImageConversations();
+      await writeStoredImageConversations(mergeImageConversations(items, [remoteItem]));
+    });
+    return remoteItem;
+  } catch (error) {
+    console.warn("Failed to load remote image conversation", error);
+    const localItems = await readStoredImageConversations();
+    return localItems.find((item) => item.id === conversationId) ?? null;
   }
 }
 
@@ -370,6 +417,12 @@ export async function clearImageConversations(): Promise<void> {
 export function getImageConversationStats(conversation: ImageConversation | null): ImageConversationStats {
   if (!conversation) {
     return { queued: 0, running: 0 };
+  }
+  if (conversation.isSummary) {
+    return {
+      queued: Math.max(0, Number(conversation.queued || 0)),
+      running: Math.max(0, Number(conversation.running || 0)),
+    };
   }
 
   return conversation.turns.reduce(

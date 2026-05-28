@@ -4,9 +4,10 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Column, DateTime, String, Text
+from sqlalchemy import Column, DateTime, Index, String, Text
+from sqlalchemy import text
 
-from services.app_database import Base, SessionLocal, init_app_database
+from services.app_database import Base, SessionLocal, engine, init_app_database
 
 
 class ImageConversationModel(Base):
@@ -19,6 +20,10 @@ class ImageConversationModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, index=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_image_conversations_owner_updated", "user_id", "deleted_at", "updated_at"),
+    )
 
 
 def _now() -> datetime:
@@ -51,23 +56,76 @@ def _public_row(row: ImageConversationModel) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _public_summary(row: ImageConversationModel) -> dict[str, Any]:
+    payload = _public_row(row)
+    turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+    active_turns = [
+        turn for turn in turns
+        if isinstance(turn, dict) and not bool(turn.get("resultsDeleted"))
+    ]
+    last_turn = next((turn for turn in reversed(turns) if isinstance(turn, dict)), {})
+    return {
+        "id": row.id,
+        "title": row.title or str(payload.get("title") or ""),
+        "createdAt": str(payload.get("createdAt") or row.created_at.isoformat()),
+        "updatedAt": str(payload.get("updatedAt") or row.updated_at.isoformat()),
+        "turnCount": len(turns),
+        "queued": sum(1 for turn in active_turns if turn.get("status") == "queued"),
+        "running": sum(1 for turn in active_turns if turn.get("status") == "generating"),
+        "lastPrompt": str(last_turn.get("prompt") or "")[:240] if isinstance(last_turn, dict) else "",
+    }
+
+
 class ImageConversationService:
     def __init__(self) -> None:
         init_app_database()
+        self._ensure_indexes()
 
-    def list(self, user_id: str) -> list[dict[str, Any]]:
+    def _ensure_indexes(self) -> None:
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_image_conversations_owner_updated "
+                    "ON operation_image_conversations (user_id, deleted_at, updated_at DESC)"
+                ))
+        except Exception:
+            pass
+
+    def list(self, user_id: str, *, limit: int = 30, cursor: str = "", summary: bool = True) -> dict[str, Any]:
         owner = str(user_id or "").strip()
         if not owner:
-            return []
+            return {"items": [], "next_cursor": ""}
+        page_size = max(1, min(100, int(limit or 30)))
         session = SessionLocal()
         try:
-            rows = (
+            query = session.query(ImageConversationModel).filter(ImageConversationModel.user_id == owner, ImageConversationModel.deleted_at.is_(None))
+            if cursor:
+                try:
+                    cursor_time = datetime.fromisoformat(str(cursor).replace("Z", "+00:00"))
+                    query = query.filter(ImageConversationModel.updated_at < cursor_time)
+                except Exception:
+                    pass
+            rows = query.order_by(ImageConversationModel.updated_at.desc()).limit(page_size + 1).all()
+            page_rows = rows[:page_size]
+            next_cursor = rows[page_size].updated_at.isoformat() if len(rows) > page_size else ""
+            mapper = _public_summary if summary else _public_row
+            return {"items": [mapper(row) for row in page_rows], "next_cursor": next_cursor}
+        finally:
+            session.close()
+
+    def get(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        owner = str(user_id or "").strip()
+        target_id = _clean_id(conversation_id)
+        if not owner or not target_id:
+            return None
+        session = SessionLocal()
+        try:
+            row = (
                 session.query(ImageConversationModel)
-                .filter(ImageConversationModel.user_id == owner, ImageConversationModel.deleted_at.is_(None))
-                .order_by(ImageConversationModel.updated_at.desc())
-                .all()
+                .filter(ImageConversationModel.id == target_id, ImageConversationModel.user_id == owner, ImageConversationModel.deleted_at.is_(None))
+                .first()
             )
-            return [_public_row(row) for row in rows]
+            return _public_row(row) if row is not None else None
         finally:
             session.close()
 

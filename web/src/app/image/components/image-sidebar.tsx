@@ -16,7 +16,10 @@ type ImageSidebarProps = {
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void | Promise<void>;
   onRenameConversation: (id: string, title: string) => void | Promise<void>;
+  onLoadMore?: () => void | Promise<void>;
   formatConversationTime: (value: string) => string;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
   hideActionButtons?: boolean;
 };
 
@@ -29,7 +32,10 @@ export function ImageSidebar({
   onSelectConversation,
   onDeleteConversation,
   onRenameConversation,
+  onLoadMore,
   formatConversationTime,
+  hasMore = false,
+  isLoadingMore = false,
   hideActionButtons = false,
 }: ImageSidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -134,7 +140,7 @@ export function ImageSidebar({
                       )}
                     </div>
                     <div className={cn("mt-1 text-xs", active ? "text-stone-500" : "text-stone-400")}>
-                      {conversation.turns.length} 轮 · {formatConversationTime(conversation.updatedAt)}
+                      {conversation.turnCount ?? conversation.turns.length} 轮 · {formatConversationTime(conversation.updatedAt)}
                     </div>
                     {stats.running > 0 || stats.queued > 0 ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
@@ -169,6 +175,17 @@ export function ImageSidebar({
               );
             })
           )}
+          {!isLoadingHistory && hasMore ? (
+            <button
+              type="button"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white/70 px-3 py-2 text-sm text-stone-600 transition hover:bg-white disabled:opacity-60"
+              onClick={() => void onLoadMore?.()}
+              disabled={isLoadingMore}
+            >
+              {isLoadingMore ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              加载更多
+            </button>
+          ) : null}
         </div>
       </div>
     </aside>

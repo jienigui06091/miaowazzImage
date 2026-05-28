@@ -30,7 +30,9 @@ import { useAuthGuard } from "@/lib/use-auth-guard";
 import {
   clearImageConversations,
   deleteImageConversation,
+  getImageConversation,
   getImageConversationStats,
+  listImageConversationPage,
   listImageConversations,
   renameImageConversation,
   saveImageConversation,
@@ -354,6 +356,7 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKey: string }) {
   const didLoadQuotaRef = useRef(false);
   const conversationsRef = useRef<ImageConversation[]>([]);
+  const loadingConversationIdsRef = useRef<Set<string>>(new Set());
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const lastConversationIdRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -368,6 +371,8 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
+  const [conversationNextCursor, setConversationNextCursor] = useState("");
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [availableQuota, setAvailableQuota] = useState("加载中...");
@@ -476,7 +481,8 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
         setImageSize(storedSize || "");
         setImageCount(storedCount ? clampImageCount(storedCount) : "1");
 
-        const items = await listImageConversations();
+        const page = await listImageConversationPage();
+        const items = page.items;
         const normalizedItems = await recoverConversationHistory(items);
         if (cancelled) {
           return;
@@ -484,6 +490,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
 
         conversationsRef.current = normalizedItems;
         setConversations(normalizedItems);
+        setConversationNextCursor(page.nextCursor);
         const storedConversationId =
           typeof window !== "undefined" ? window.localStorage.getItem(activeConversationStorageKey) : null;
         const nextSelectedConversationId =
@@ -588,6 +595,42 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   }, [activeConversationStorageKey, selectedConversationId]);
 
   useEffect(() => {
+    if (!selectedConversationId) {
+      return;
+    }
+    const selected = conversationsRef.current.find((conversation) => conversation.id === selectedConversationId);
+    if (!selected?.isSummary || loadingConversationIdsRef.current.has(selectedConversationId)) {
+      return;
+    }
+
+    let cancelled = false;
+    loadingConversationIdsRef.current.add(selectedConversationId);
+    const loadConversationDetail = async () => {
+      try {
+        const detail = await getImageConversation(selectedConversationId);
+        if (cancelled || !detail) {
+          return;
+        }
+        const nextConversations = sortImageConversations([
+          { ...detail, isSummary: false },
+          ...conversationsRef.current.filter((item) => item.id !== selectedConversationId),
+        ]);
+        conversationsRef.current = nextConversations;
+        setConversations(nextConversations);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "读取会话详情失败");
+      } finally {
+        loadingConversationIdsRef.current.delete(selectedConversationId);
+      }
+    };
+
+    void loadConversationDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedConversationId, conversations]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -683,6 +726,27 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
     }
   };
 
+  const handleLoadMoreConversations = async () => {
+    if (!conversationNextCursor || isLoadingMoreConversations) {
+      return;
+    }
+    setIsLoadingMoreConversations(true);
+    try {
+      const page = await listImageConversationPage(conversationNextCursor);
+      const nextConversations = sortImageConversations([
+        ...conversationsRef.current,
+        ...page.items.filter((item) => !conversationsRef.current.some((current) => current.id === item.id)),
+      ]);
+      conversationsRef.current = nextConversations;
+      setConversations(nextConversations);
+      setConversationNextCursor(page.nextCursor);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取更多会话失败");
+    } finally {
+      setIsLoadingMoreConversations(false);
+    }
+  };
+
   const handleDeleteTurnPart = async (conversationId: string, turnId: string, part: "prompt" | "results") => {
     const conversation = conversationsRef.current.find((item) => item.id === conversationId);
     if (!conversation) {
@@ -727,6 +791,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
       await clearImageConversations();
       conversationsRef.current = [];
       setConversations([]);
+      setConversationNextCursor("");
       setSelectedConversationId(null);
       resetComposer();
       toast.success("已清空历史记录");
@@ -1171,9 +1236,12 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
 
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
 
-    const targetConversation = selectedConversationId
+    let targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null
       : null;
+    if (targetConversation?.isSummary) {
+      targetConversation = await getImageConversation(targetConversation.id);
+    }
     const now = new Date().toISOString();
     const conversationId = targetConversation?.id ?? createId();
     const turnId = createId();
@@ -1235,7 +1303,10 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
             onSelectConversation={setSelectedConversationId}
             onDeleteConversation={openDeleteConversationConfirm}
             onRenameConversation={handleRenameConversation}
+            onLoadMore={handleLoadMoreConversations}
             formatConversationTime={formatConversationTime}
+            hasMore={Boolean(conversationNextCursor)}
+            isLoadingMore={isLoadingMoreConversations}
           />
         </div>
 
@@ -1263,7 +1334,10 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
                 }}
                 onDeleteConversation={openDeleteConversationConfirm}
                 onRenameConversation={handleRenameConversation}
+                onLoadMore={handleLoadMoreConversations}
                 formatConversationTime={formatConversationTime}
+                hasMore={Boolean(conversationNextCursor)}
+                isLoadingMore={isLoadingMoreConversations}
                 hideActionButtons
               />
             </div>
