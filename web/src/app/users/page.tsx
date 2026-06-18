@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Eye, EyeOff, KeyRound, LoaderCircle, Plus, UserRoundCog } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LoaderCircle, UserRoundCog } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -78,9 +78,10 @@ export default function UsersPage() {
   };
 
   const handleGrant = async (user: OperationUser) => {
-    const amount = Math.floor(Number(quotaInputs[user.id] || 0));
-    if (amount <= 0) {
-      toast.error("请输入大于 0 的额度");
+    const rawAmount = quotaInputs[user.id]?.trim() ?? "";
+    const amount = Math.floor(Number(rawAmount));
+    if (!rawAmount || !Number.isFinite(amount) || amount < 0) {
+      toast.error("请输入大于等于 0 的额度");
       return;
     }
     setBusyId(user.id);
@@ -251,7 +252,7 @@ export default function UsersPage() {
                         className="h-9 rounded-lg"
                       />
                       <Button className="h-9 rounded-lg bg-stone-950 text-white" onClick={() => void handleGrant(item)} disabled={busyId === item.id}>
-                        <Plus className="size-4" />
+                        <UserRoundCog className="size-4" />
                       </Button>
                     </div>
                   </td>

@@ -31,7 +31,7 @@ class UserStatusRequest(BaseModel):
 
 
 class QuotaGrantRequest(BaseModel):
-    amount: int = Field(..., gt=0)
+    amount: int = Field(..., ge=0)
     note: str = ""
 
 

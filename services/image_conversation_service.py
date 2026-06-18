@@ -179,6 +179,8 @@ class ImageConversationService:
                 )
                 session.add(row)
             else:
+                if row.deleted_at is not None:
+                    raise ValueError("conversation has been deleted")
                 row.title = _payload_title(payload)
                 row.payload = encoded
                 row.updated_at = updated_at
