@@ -86,6 +86,11 @@ function formatAvailableQuota(accounts: Account[]) {
   return String(availableAccounts.reduce((sum, account) => sum + Math.max(0, account.quota), 0));
 }
 
+function parseAvailableQuota(value: string) {
+  const quota = Number(value);
+  return Number.isFinite(quota) ? quota : null;
+}
+
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -363,6 +368,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   const scrollRafRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deletedConversationIdsRef = useRef<Set<string>>(new Set());
 
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageCount, setImageCount] = useState("1");
@@ -655,6 +661,9 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   }, [conversations, selectedConversationId]);
 
   const persistConversation = async (conversation: ImageConversation) => {
+    if (deletedConversationIdsRef.current.has(conversation.id)) {
+      return;
+    }
     const nextConversations = sortImageConversations([
       conversation,
       ...conversationsRef.current.filter((item) => item.id !== conversation.id),
@@ -670,8 +679,14 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
       updater: (current: ImageConversation | null) => ImageConversation,
       options: { persist?: boolean } = {},
     ) => {
+      if (deletedConversationIdsRef.current.has(conversationId)) {
+        return;
+      }
       const current = conversationsRef.current.find((item) => item.id === conversationId) ?? null;
       const nextConversation = updater(current);
+      if (deletedConversationIdsRef.current.has(nextConversation.id)) {
+        return;
+      }
       const nextConversations = sortImageConversations([
         nextConversation,
         ...conversationsRef.current.filter((item) => item.id !== conversationId),
@@ -707,6 +722,8 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   };
 
   const handleDeleteConversation = async (id: string) => {
+    deletedConversationIdsRef.current.add(id);
+    activeConversationQueueIds.delete(id);
     const nextConversations = conversations.filter((item) => item.id !== id);
     conversationsRef.current = nextConversations;
     setConversations(nextConversations);
@@ -718,6 +735,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
     try {
       await deleteImageConversation(id);
     } catch (error) {
+      deletedConversationIdsRef.current.delete(id);
       const message = error instanceof Error ? error.message : "删除会话失败";
       toast.error(message);
       const items = await listImageConversations();
@@ -971,6 +989,9 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   /* eslint-disable react-hooks/preserve-manual-memoization */
   const runConversationQueue = useCallback(
     async (conversationId: string) => {
+      if (deletedConversationIdsRef.current.has(conversationId)) {
+        return;
+      }
       if (activeConversationQueueIds.has(conversationId)) {
         return;
       }
@@ -1035,6 +1056,10 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
           };
         });
 
+        if (deletedConversationIdsRef.current.has(conversationId)) {
+          return;
+        }
+
         const referenceFiles = activeTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
         );
@@ -1065,24 +1090,39 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
           }
 
           await sleep(2000);
+          if (deletedConversationIdsRef.current.has(conversationId)) {
+            break;
+          }
           const taskList = await fetchImageTasks(loadingTaskIds);
           if (taskList.items.length > 0) {
             await applyTasks(taskList.items);
           }
           if (taskList.missing_ids.length > 0 && latestTurn) {
-            const missingImages = latestTurn.images.filter(
-              (image) => image.status === "loading" && image.taskId && taskList.missing_ids.includes(image.taskId),
-            );
-            const resubmitted = await Promise.all(
-              missingImages.map((image) =>
-                activeTurn.mode === "edit"
-                  ? createImageEditTask(image.taskId || image.id, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size)
-                  : createImageGenerationTask(image.taskId || image.id, activeTurn.prompt, activeTurn.model, activeTurn.size),
-              ),
-            );
-            if (resubmitted.length > 0) {
-              await applyTasks(resubmitted);
-            }
+            const missingTaskIds = new Set(taskList.missing_ids);
+            await updateConversation(conversationId, (current) => {
+              const conversation = current ?? snapshot;
+              const turns = conversation.turns.map((turn) => {
+                if (turn.id !== activeTurn.id) {
+                  return turn;
+                }
+                const images = turn.images.map((image) =>
+                  image.status === "loading" && image.taskId && missingTaskIds.has(image.taskId)
+                    ? { ...image, status: "error" as const, error: "Task was deleted or expired." }
+                    : image,
+                );
+                const derived = deriveTurnStatus({ ...turn, images });
+                return {
+                  ...turn,
+                  ...derived,
+                  images,
+                };
+              });
+              return {
+                ...conversation,
+                updatedAt: new Date().toISOString(),
+                turns,
+              };
+            });
           }
         }
 
@@ -1113,6 +1153,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
         activeConversationQueueIds.delete(conversationId);
         for (const conversation of conversationsRef.current) {
           if (
+            !deletedConversationIdsRef.current.has(conversation.id) &&
             !activeConversationQueueIds.has(conversation.id) &&
             conversation.turns.some(
               (turn) =>
@@ -1214,6 +1255,7 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
   useEffect(() => {
     for (const conversation of conversations) {
       if (
+        !deletedConversationIdsRef.current.has(conversation.id) &&
         !activeConversationQueueIds.has(conversation.id) &&
         conversation.turns.some(
           (turn) =>
@@ -1235,6 +1277,14 @@ function ImagePageContent({ isAdmin, sessionKey }: { isAdmin: boolean; sessionKe
     }
 
     const effectiveImageMode: ImageConversationMode = referenceImageFiles.length > 0 ? "edit" : "generate";
+    if (!isAdmin) {
+      const currentQuota = parseAvailableQuota(availableQuota);
+      if (currentQuota !== null && currentQuota < parsedCount) {
+        toast.error("生成额度不足");
+        void loadQuota();
+        return;
+      }
+    }
 
     let targetConversation = selectedConversationId
       ? conversationsRef.current.find((conversation) => conversation.id === selectedConversationId) ?? null

@@ -447,9 +447,18 @@ class UserService:
             session.close()
 
     def grant_quota(self, user_id: str, amount: int, *, created_by: str = "", note: str = "") -> dict[str, Any]:
-        if int(amount or 0) <= 0:
-            raise ValueError("增加额度必须大于 0")
-        return self._change_quota(user_id, int(amount), reason="admin_grant", created_by=created_by, note=note)
+        target_quota = int(amount or 0)
+        if target_quota < 0:
+            raise ValueError("分配额度不能小于 0")
+        session = self._session()
+        try:
+            user = session.query(UserModel).filter(UserModel.id == user_id).first()
+            if user is None:
+                raise ValueError("用户不存在")
+            delta = target_quota - int(user.image_quota or 0)
+        finally:
+            session.close()
+        return self._change_quota(user_id, delta, reason="admin_grant", created_by=created_by, note=note)
 
     def reserve_quota(self, identity: dict[str, Any], amount: int, *, reason: str = "generate") -> dict[str, Any] | None:
         if identity.get("role") == "admin":
