@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/jienigui06091/miaowazzimage:${IMAGE_TAG:-latest}
+    image: miaowazz/miaowazzimage:${IMAGE_TAG:-latest}
     container_name: miaowazzimage
     restart: unless-stopped
     env_file:
