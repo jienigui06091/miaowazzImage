@@ -1,9 +1,6 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: miaowazzimage:latest
+    image: ghcr.io/jienigui06091/miaowazzimage:${IMAGE_TAG:-latest}
     container_name: miaowazzimage
     restart: unless-stopped
     env_file:
